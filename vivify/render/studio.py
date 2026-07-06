@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""schemdraw studio — Streamlit 製の web エディタ（左=ソース / 右=ライブSVG / 保存）。
+"""figure studio — Streamlit 製の web エディタ（左=ソース / 右=ライブSVG / 保存）。
+
+Python を書いて `out`(SVGパス) に SVG を保存すれば何でも可（schemdraw/matplotlib/…）。
 
 起動:  streamlit run studio.py
        ?svg=<path> を付けると、その SVG の埋込ソースを読み込み、保存先も既定でそこに。
 nvim 連携: ,,e が既存 SVG を ?svg= 付きで開く / 新規は空で開く → 保存で SVG 生成。
 """
+import json
 import os
 import re
 import sys
@@ -60,7 +63,7 @@ def extract_source(svg_path):
     return m.group(1).replace("]]]]><![CDATA[>", "]]>")
 
 
-st.set_page_config(page_title="schemdraw studio", layout="wide")
+st.set_page_config(page_title="figure studio", layout="wide")
 
 target = st.query_params.get("svg", "")
 
@@ -132,7 +135,31 @@ with c2:
                 f.write(svg2)
             st.success(f"保存しました: {save_path}")
 
-# 新規作成フロー用: SVG をコピー → nvim の md で ,,p 貼付(SmartPaste が保存+![]挿入)
+# 新規作成フロー用: ワンクリックで SVG をクリップボードへ → nvim の md で ,,p 貼付
+# (localhost は secure context なので navigator.clipboard が使える。ダメなら execCommand で fallback)
 if not err:
-    with st.expander("📋 SVG をコピー（右上のコピーボタン → nvim で `,,p` 貼付）"):
-        st.code(svg, language="xml")
+    components.html(
+        """
+        <button id="cp" style="font-size:14px;padding:8px 18px;border:none;border-radius:6px;
+                background:#5599cc;color:#fff;cursor:pointer;font-family:sans-serif">
+          📋 SVG をコピー
+        </button>
+        <span id="msg" style="margin-left:12px;font-family:sans-serif;color:#2a2;font-size:14px"></span>
+        <script>
+          const svg = __SVG__;
+          const btn = document.getElementById('cp');
+          const msg = document.getElementById('msg');
+          btn.onclick = async () => {
+            try { await navigator.clipboard.writeText(svg); }
+            catch (e) {
+              const ta = document.createElement('textarea');
+              ta.value = svg; document.body.appendChild(ta); ta.select();
+              document.execCommand('copy'); ta.remove();
+            }
+            msg.textContent = '✅ コピーしました → nvim で ,,p';
+            setTimeout(() => { msg.textContent = ''; }, 2500);
+          };
+        </script>
+        """.replace("__SVG__", json.dumps(svg)),
+        height=52,
+    )
