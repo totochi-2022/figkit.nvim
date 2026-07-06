@@ -16,6 +16,11 @@ local RENDER = {
 }
 local PY = 'python3' -- mise の python(schemdraw 入り)想定
 
+-- 内容ハッシュで命名（同じフェンス内容→同じファイル名＝冪等・上書き。増殖しない）
+local function svg_name(kind, body)
+    return kind .. '-' .. vim.fn.sha256(kind .. '\0' .. body):sub(1, 10) .. '.svg'
+end
+
 -- python レンダラを stdin=source で実行し out へ SVG を書く。ok, err を返す
 local function run_render(kind, source, out)
     local script = RENDER[kind]
@@ -69,7 +74,7 @@ local function do_render()
     if mdpath == '' then return nil, 'unsaved' end
     local dir = vim.fn.fnamemodify(mdpath, ':h')
     vim.fn.mkdir(dir .. '/assets', 'p')
-    local name = kind .. '-' .. os.date('%Y%m%d-%H%M%S') .. '.svg'
+    local name = svg_name(kind, body)
     local ok, err = run_render(kind, body, dir .. '/assets/' .. name)
     if not ok then return nil, 'render:' .. err end
     vim.api.nvim_buf_set_lines(0, sf - 1, ef, false, { '![](assets/' .. name .. ')' })
@@ -141,20 +146,67 @@ function M.try_edit_file(path)
     return true
 end
 
+-- バッファ内の対応フェンス全てを {sf, ef, kind, body} で返す(出現順)
+local function all_fences()
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    local out, i = {}, 1
+    while i <= #lines do
+        local k = lines[i]:match('^%s*```%s*(%a[%w_-]*)%s*$')
+        if k then
+            local ef
+            for j = i + 1, #lines do
+                if lines[j]:match('^%s*```%s*$') then ef = j; break end
+            end
+            if not ef then break end
+            if RENDER[k] then
+                out[#out + 1] = {
+                    sf = i, ef = ef, kind = k,
+                    body = table.concat(vim.api.nvim_buf_get_lines(0, i, ef - 1, false), '\n'),
+                }
+            end
+            i = ef + 1
+        else
+            i = i + 1
+        end
+    end
+    return out
+end
+
+-- バッファ内の対応フェンスを全て SVG 化して ![] 置換。描画数を返す(0なら通知なし)
+function M.render_all()
+    local fences = all_fences()
+    if #fences == 0 then return 0 end
+    local mdpath = vim.fn.expand('%:p')
+    if mdpath == '' then
+        vim.notify('ファイルが保存されていません', vim.log.levels.WARN)
+        return 0
+    end
+    local dir = vim.fn.fnamemodify(mdpath, ':h')
+    vim.fn.mkdir(dir .. '/assets', 'p')
+    local n = 0
+    -- 下から処理して行番号ズレを防ぐ
+    for idx = #fences, 1, -1 do
+        local f = fences[idx]
+        local name = svg_name(f.kind, f.body)
+        local ok, err = run_render(f.kind, f.body, dir .. '/assets/' .. name)
+        if ok then
+            vim.api.nvim_buf_set_lines(0, f.sf - 1, f.ef, false, { '![](assets/' .. name .. ')' })
+            n = n + 1
+        else
+            vim.notify('描画失敗(' .. f.kind .. '):\n' .. err, vim.log.levels.ERROR)
+        end
+    end
+    return n
+end
+
 -- === 明示コマンド ========================================================
 
-function M.render() -- :DiagramRender
-    local name, reason = do_render()
-    if name then
-        vim.notify('生成: assets/' .. name)
-    elseif reason == 'no_fence' then
-        vim.notify('カーソルが ```<kind> フェンス内にありません', vim.log.levels.WARN)
-    elseif reason and reason:match('^unsupported:') then
-        vim.notify('DiagramRender 未対応: ' .. reason:sub(13) .. '（対応: schemdraw）', vim.log.levels.WARN)
-    elseif reason == 'unsaved' then
-        vim.notify('ファイルが保存されていません', vim.log.levels.WARN)
+function M.render() -- :DiagramRender — バッファ内の対応フェンスを全て描画(カーソル無関係)
+    local n = M.render_all()
+    if n > 0 then
+        vim.notify('生成: ' .. n .. ' 図')
     else
-        vim.notify('描画失敗:\n' .. (reason or ''):gsub('^render:', ''), vim.log.levels.ERROR)
+        vim.notify('描画対象の ```schemdraw フェンスがありません', vim.log.levels.WARN)
     end
 end
 
