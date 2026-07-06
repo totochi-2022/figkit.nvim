@@ -31,24 +31,33 @@ def main() -> int:
         sys.stderr.write(f"schemdraw import 失敗: {e}\n(pip install schemdraw)\n")
         return 3
 
+    def brief(e):
+        # ユーザースニペット(<string>)の行番号を拾って1行に整形（全トレース非表示）
+        if isinstance(e, SyntaxError):
+            loc = f" (line {e.lineno})" if e.lineno else ""
+            return f"{type(e).__name__}: {e.msg}{loc}"
+        import traceback
+        line = None
+        for fr in traceback.extract_tb(e.__traceback__):
+            if fr.filename == "<string>":
+                line = fr.lineno
+        loc = f" (line {line})" if line else ""
+        return f"{type(e).__name__}: {e}{loc}"
+
     ns = {"schemdraw": schemdraw, "elm": elm}
     d = schemdraw.Drawing(show=False)
     ns["d"] = d
     try:
         exec(source, ns)  # noqa: S102  (ローカル専用・信頼入力前提)
     except Exception as e:  # noqa: BLE001
-        import traceback
-        sys.stderr.write("schemdraw スニペット実行エラー:\n")
-        traceback.print_exc()
+        sys.stderr.write(brief(e) + "\n")
         return 4
 
     d = ns.get("d", d)
     try:
         svg = d.get_imagedata("svg")
     except Exception as e:  # noqa: BLE001
-        import traceback
-        sys.stderr.write("SVG 生成エラー:\n")
-        traceback.print_exc()
+        sys.stderr.write("SVG生成: " + brief(e) + "\n")
         return 5
     if isinstance(svg, bytes):
         svg = svg.decode("utf-8")
