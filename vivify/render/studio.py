@@ -18,6 +18,9 @@ import streamlit.components.v1 as components
 from streamlit_ace import st_ace
 from render_schemdraw import render
 
+# 末尾のコメントは「補完シード」。streamlit-ace の補完はバッファ内の既出単語を拾う
+# 方式なので、系統ごとの頻出シンボルをコメントで置いておくと `elm.R`→`Resistor` の
+# ように候補に出る（意味解析ではないが実用上これが一番早い）。不要なら消してよい。
 DEFAULT = (
     "import schemdraw\n"
     "import schemdraw.elements as elm\n"
@@ -27,6 +30,15 @@ DEFAULT = (
     "d += elm.Capacitor().label('C1').down()\n"
     "d += elm.Ground()\n"
     "d.save(out)\n"
+    "\n"
+    "# --- 補完シード(schemdraw) ---\n"
+    "# elm: Resistor Capacitor Inductor Diode LED Zener Photodiode Battery Cell\n"
+    "#      SourceV SourceI SourceSin Source Switch SwitchSpdt Button Ground Vdd Vss\n"
+    "#      Line Dot Arrow Gap Label Opamp Fuse Crystal Transformer Josephson\n"
+    "#      Nmos Pmos NFet PFet Bjt BjtNpn BjtPnp\n"
+    "# メソッド: .label() .up() .down() .left() .right() .at() .to() .length()\n"
+    "#          .color() .fill() .reverse() .flip() .theta() .scale() .linewidth()\n"
+    "# Drawing: d.push() d.pop() d.move() d.here d.add()\n"
 )
 
 # テンプレ: SVG を out に書けば何でも可（schemdraw は d に描けば out 不要）
@@ -40,12 +52,26 @@ TEMPLATES = {
         "plt.plot(x, np.sin(x), label='sin')\n"
         "plt.legend(); plt.grid(True)\n"
         "plt.savefig(out)\n"
+        "\n"
+        "# --- 補完シード(matplotlib/numpy) ---\n"
+        "# plt: plot scatter bar barh hist boxplot pie fill_between step stem errorbar\n"
+        "#      imshow contour axhline axvline annotate text\n"
+        "#      xlabel ylabel title suptitle legend grid xlim ylim xticks yticks\n"
+        "#      subplot subplots figure tight_layout twinx savefig\n"
+        "# np: linspace arange array sin cos tan exp log sqrt pi zeros ones\n"
+        "#     random meshgrid mean std max min abs where clip concatenate\n"
     ),
     "raw SVG": (
         "open(out, 'w').write('''<svg xmlns=\"http://www.w3.org/2000/svg\" "
         "width=\"140\" height=\"60\"><rect x=\"10\" y=\"10\" width=\"120\" height=\"40\" "
         "rx=\"6\" fill=\"#5599cc\"/><text x=\"70\" y=\"36\" text-anchor=\"middle\" "
         "fill=\"white\" font-family=\"sans-serif\">hello</text></svg>''')\n"
+        "\n"
+        "# --- 補完シード(SVG) ---\n"
+        "# 要素: rect circle ellipse line polyline polygon path text tspan g defs\n"
+        "#       linearGradient radialGradient stop clipPath mask use symbol marker\n"
+        "# 属性: x y width height cx cy r rx ry x1 y1 x2 y2 d points transform viewBox\n"
+        "#       fill stroke stroke-width opacity font-family font-size text-anchor\n"
     ),
 }
 
