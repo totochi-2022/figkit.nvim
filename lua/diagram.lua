@@ -89,6 +89,10 @@ local function open_editor(svg, kind, src)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(src, '\n'))
     vim.bo[buf].buftype = 'acwrite' -- :w を BufWriteCmd で受ける
     vim.bo[buf].filetype = 'python' -- schemdraw スニペットは python 風
+    -- スニペットは top-level 文。autoindent 由来のインデント混入を防ぐ(renderer も dedent 済)
+    vim.bo[buf].autoindent = false
+    vim.bo[buf].smartindent = false
+    vim.bo[buf].indentexpr = ''
     vim.api.nvim_buf_set_name(buf, 'diagram://' .. vim.fn.fnamemodify(svg, ':t'))
     vim.b[buf].diagram_svg = svg
     vim.b[buf].diagram_kind = kind
@@ -106,7 +110,10 @@ local function open_editor(svg, kind, src)
             vim.notify('再生成: ' .. vim.fn.fnamemodify(vim.b[buf].diagram_svg, ':t'))
         end,
     })
-    vim.notify('編集: ' .. kind .. '（:w で SVG 再生成）')
+    -- 右に SVG のライブプレビュー。Vivify がこの SVG を監視し、:w の再生成(上書き)で
+    -- 自動リロードする＝左ソース編集→保存→右が更新、の studio になる。
+    pcall(function() require('vivify').open_path(svg) end)
+    vim.notify('編集: ' .. kind .. '（左=ソース / 右=Vivify。:w で再生成→自動更新）')
 end
 
 -- 相対/絶対パスを編集中ファイル基準で絶対化

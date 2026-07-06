@@ -17,8 +17,11 @@ def main() -> int:
     if len(sys.argv) < 2:
         sys.stderr.write("usage: schemdraw.py <out.svg> < snippet\n")
         return 2
+    import textwrap
     out_path = sys.argv[1]
-    source = sys.stdin.read()
+    # 一様な先頭インデント(エディタの autoindent / リスト内フェンス等)を除去。
+    # 相対インデント(for 本体など)は保持されるので安全。
+    source = textwrap.dedent(sys.stdin.read())
 
     try:
         import schemdraw
