@@ -26,7 +26,8 @@ TEMPLATES = {
     "schemdraw (回路)": (
         "import schemdraw\n"
         "import schemdraw.elements as elm\n"
-        "schemdraw.use('svg')\n"
+        "if out.endswith('.svg'):\n"
+        "    schemdraw.use('svg')\n"
         "d = schemdraw.Drawing(show=False)\n"
         "d += elm.Resistor().label('R1')\n"
         "d += elm.Capacitor().label('C1').down()\n"
@@ -42,6 +43,20 @@ TEMPLATES = {
         "plt.legend()\n"
         "plt.grid(True)\n"
         "plt.savefig(out)\n"
+    ),
+    "rdkit (化学構造)": (
+        "from rdkit import Chem\n"
+        "from rdkit.Chem import rdDepictor\n"
+        "from rdkit.Chem.Draw import rdMolDraw2D\n"
+        "\n"
+        'smiles = "CC(=O)Oc1ccccc1C(=O)O"  # アスピリン。SMILES を書き換えて構造を変える\n'
+        "mol = Chem.MolFromSmiles(smiles)\n"
+        "rdDepictor.Compute2DCoords(mol)\n"
+        'svg = out.endswith(".svg")\n'
+        "d = (rdMolDraw2D.MolDraw2DSVG if svg else rdMolDraw2D.MolDraw2DCairo)(400, 300)\n"
+        "d.DrawMolecule(mol)\n"
+        "d.FinishDrawing()\n"
+        'open(out, "w" if svg else "wb").write(d.GetDrawingText())\n'
     ),
     "raw SVG": (
         'open(out, "w").write("""<svg xmlns="http://www.w3.org/2000/svg" width="140" height="60">'

@@ -55,6 +55,21 @@ local TEMPLATES = {
         "</svg>''')",
         "",
     }, "\n"),
+    rdkit = table.concat({
+        "from rdkit import Chem",
+        "from rdkit.Chem import rdDepictor",
+        "from rdkit.Chem.Draw import rdMolDraw2D",
+        "",
+        'smiles = "CC(=O)Oc1ccccc1C(=O)O"  # アスピリン。SMILES を書き換えて構造を変える',
+        "mol = Chem.MolFromSmiles(smiles)",
+        "rdDepictor.Compute2DCoords(mol)",
+        'svg = out.endswith(".svg")',
+        "d = (rdMolDraw2D.MolDraw2DSVG if svg else rdMolDraw2D.MolDraw2DCairo)(400, 300)",
+        "d.DrawMolecule(mol)",
+        "d.FinishDrawing()",
+        'open(out, "w" if svg else "wb").write(d.GetDrawingText())',
+        "",
+    }, "\n"),
 }
 
 -- 画像(svg/png/jpg)に埋め込んだ元ソースを取り出す。無ければ nil(=我々の図でない)。
@@ -208,8 +223,8 @@ function M.setup()
         M.new(kind, fmt)
     end, {
         nargs = '*',
-        complete = function() return { 'schemdraw', 'matplotlib', 'raw', 'svg', 'png' } end,
-        desc = 'figure studio: 新規図を作成 :Studio [schemdraw|matplotlib|raw] [svg|png]',
+        complete = function() return { 'schemdraw', 'matplotlib', 'rdkit', 'raw', 'svg', 'png' } end,
+        desc = 'figure studio: 新規図を作成 :Studio [schemdraw|matplotlib|rdkit|raw] [svg|png]',
     })
 end
 
