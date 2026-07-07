@@ -76,8 +76,8 @@ if not target or not pyfile:
     st.warning("nvim から `:Studio` / `,,e` で開いてください（?svg= と ?py= が必要）。")
     st.stop()
 
-# ツールバー: テンプレ選択+挿入 / SVGコピー
-t1, t2, t3 = st.columns([3, 1, 1], vertical_alignment="bottom")
+# ツールバー: テンプレ選択+挿入（📋コピーは右ペインの fragment 内=エラー時は出さない）
+t1, t2 = st.columns([4, 1], vertical_alignment="bottom")
 with t1:
     st.selectbox("テンプレ", list(TEMPLATES), key="tpl_sel", label_visibility="collapsed")
 with t2:
@@ -89,50 +89,53 @@ with t2:
             st.toast("テンプレを挿入（vim をリロード）")
         except OSError as e:
             st.error(f"テンプレ挿入に失敗: {e}")
-with t3:
-    try:
-        svg = open(target, encoding="utf-8").read()
-    except OSError:
-        svg = ""
-    components.html(
-        """
-        <button id="cp" style="width:100%;font-size:14px;padding:8px 0;border:none;border-radius:6px;
-                background:#5599cc;color:#fff;cursor:pointer;font-family:sans-serif">📋 SVGコピー</button>
-        <span id="msg" style="margin-left:8px;font-family:sans-serif;color:#2a2;font-size:13px"></span>
-        <script>
-          const svg = __SVG__;
-          const btn = document.getElementById('cp'), msg = document.getElementById('msg');
-          btn.onclick = async () => {
-            try { await navigator.clipboard.writeText(svg); }
-            catch (e) {
-              const ta = document.createElement('textarea');
-              ta.value = svg; document.body.appendChild(ta); ta.select();
-              document.execCommand('copy'); ta.remove();
-            }
-            msg.textContent = '✅ コピー'; setTimeout(() => { msg.textContent = ''; }, 2000);
-          };
-        </script>
-        """.replace("__SVG__", json.dumps(svg)),
-        height=46,
-    )
+
+COPY_BTN = """
+<button id="cp" style="font-size:14px;padding:7px 16px;border:none;border-radius:6px;
+        background:#5599cc;color:#fff;cursor:pointer;font-family:sans-serif">📋 SVGコピー</button>
+<span id="msg" style="margin-left:10px;font-family:sans-serif;color:#2a2;font-size:13px"></span>
+<script>
+  const svg = __SVG__;
+  const btn = document.getElementById('cp'), msg = document.getElementById('msg');
+  btn.onclick = async () => {
+    try { await navigator.clipboard.writeText(svg); }
+    catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = svg; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+    }
+    msg.textContent = '✅ コピー'; setTimeout(() => { msg.textContent = ''; }, 2000);
+  };
+</script>
+"""
+
 
 @st.fragment(run_every="1s")
-def preview(svg_path):
-    """右ペインだけ 1秒ごとに再実行して SVG を読み直す(ページ全体=左の端末は再描画しない)。
-    内容が変わらなければ Streamlit の差分照合で iframe は張り直されず、チラつかない。"""
+def preview(svg_path, py_path):
+    """右ペインだけ 1秒ごとに再実行(左の端末は再描画しない)。生成エラー時(=<py>.err がある)は
+    画像もコピーも出さず、エラーだけ表示する(古い画像を残さない・壊れた SVG をコピーさせない)。"""
+    errfile = py_path + ".err"
+    if os.path.exists(errfile):
+        try:
+            msg = open(errfile, encoding="utf-8").read()
+        except OSError:
+            msg = ""
+        st.error("⚠ 生成エラー（左の nvim で直して `:w`）\n\n" + msg)
+        return
     try:
         svg_now = open(svg_path, encoding="utf-8").read()
     except OSError:
         svg_now = ""
-    if svg_now:
-        components.html(
-            '<div style="background:#fff;padding:8px;display:flex;justify-content:center">'
-            + svg_now + "</div>",
-            height=560,
-            scrolling=True,
-        )
-    else:
+    if not svg_now:
         st.info("まだ SVG がありません（左の nvim で `:w`）")
+        return
+    components.html(
+        '<div style="background:#fff;padding:8px;display:flex;justify-content:center">'
+        + svg_now + "</div>",
+        height=510,
+        scrolling=True,
+    )
+    components.html(COPY_BTN.replace("__SVG__", json.dumps(svg_now)), height=44)
 
 
 left, right = st.columns(2, gap="small")
@@ -140,5 +143,5 @@ with left:
     st.caption("source — nvim（pyright 補完・`:w` で右に反映）")
     components.iframe(f"http://localhost:{ttyd_port}/", height=560)
 with right:
-    st.caption("preview — SVG（`:w` で更新）")
-    preview(target)
+    st.caption("preview — SVG（`:w` で更新 / エラー時は非表示）")
+    preview(target, pyfile)

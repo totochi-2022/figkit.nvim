@@ -11,6 +11,7 @@
 スニペットは exec する（＝任意コード実行）ので信頼できる入力のみ（ローカル専用）。
 スコープに schemdraw / elm / d(Drawing, show=False) を用意済み。例: d += elm.Resistor().label('R1')
 """
+import os
 import sys
 import textwrap
 
@@ -79,15 +80,29 @@ def render(source):
 
 def main() -> int:
     if len(sys.argv) < 2:
-        sys.stderr.write("usage: render_schemdraw.py <out.svg> < snippet\n")
+        sys.stderr.write("usage: render_schemdraw.py <out.svg> [errfile] < snippet\n")
         return 2
+    out = sys.argv[1]
+    errfile = sys.argv[2] if len(sys.argv) > 2 else None  # studio 用のエラー状態 sidecar
     svg, err = render(sys.stdin.read())
     if err:
+        # 失敗: SVG は上書きせず(前の正常版を保持)、errfile にメッセージを残す
+        if errfile:
+            try:
+                with open(errfile, "w", encoding="utf-8") as f:
+                    f.write(err)
+            except OSError:
+                pass
         sys.stderr.write(err + "\n")
         return 4
-    with open(sys.argv[1], "w", encoding="utf-8") as f:
+    with open(out, "w", encoding="utf-8") as f:
         f.write(svg)
-    print(sys.argv[1])
+    if errfile:  # 成功: エラー状態を解除
+        try:
+            os.remove(errfile)
+        except OSError:
+            pass
+    print(out)
     return 0
 
 

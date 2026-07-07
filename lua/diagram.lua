@@ -89,8 +89,9 @@ end
 local function regen(bufnr)
     local target = vim.b[bufnr].fig_target
     if not target or target == '' then return end
+    local errfile = vim.api.nvim_buf_get_name(bufnr) .. '.err' -- studio がエラー状態を見る sidecar
     local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), '\n')
-    local out = vim.fn.system({ 'python3', RENDER_PY, target }, src)
+    local out = vim.fn.system({ 'python3', RENDER_PY, target, errfile }, src)
     if vim.v.shell_error ~= 0 then
         vim.notify('図の生成エラー: ' .. vim.trim(out), vim.log.levels.ERROR)
     else
@@ -148,7 +149,7 @@ function M.studio(target, source)
     local sock = (py:gsub('%.py$', '')) .. '.sock'
     vim.fn.writefile(vim.split(source, '\n', { plain = true }), py)
 
-    vim.fn.system({ 'python3', RENDER_PY, target }, source) -- 右ペイン用に初回 SVG
+    vim.fn.system({ 'python3', RENDER_PY, target, py .. '.err' }, source) -- 右ペイン用に初回 SVG
     start_ttyd(target, py, sock)
 
     local up = studio_up()
