@@ -76,6 +76,9 @@ if not target or not pyfile:
     st.warning("nvim から `:Studio` / `,,e` で開いてください（?svg= と ?py= が必要）。")
     st.stop()
 
+# 保存先 SVG を明示（左の nvim で :w すると ここに再生成/保存される）
+st.caption(f"💾 保存先 SVG: `{target}` — 左の nvim で `:w` すると再生成・保存")
+
 # ツールバー: テンプレ選択+挿入（📋コピーは右ペインの fragment 内=エラー時は出さない）
 t1, t2 = st.columns([4, 1], vertical_alignment="bottom")
 with t1:
