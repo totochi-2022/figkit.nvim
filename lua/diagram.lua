@@ -1,30 +1,29 @@
--- diagram.lua — 図(Python→SVG)を「studio ページ」で編集する。
+-- diagram.lua — 図(Python→SVG)を Streamlit「figure studio」で編集する。
 --
--- studio ページ = 1枚の web ページ(iframe 2枚, wslview で開く):
---   ・左  : ttyd(127.0.0.1:7690) → tmux で nvim を永続起動。あなたの設定がそのまま乗るので
---           pyright の本物補完(引数ヒント/文脈)が効く。ブラウザ/ttyd が落ちても tmux セッションに
---           再アタッチするので編集中の状態は生き残る(=「落ちても意味がある」)。
---   ・右  : Vivify が対象 SVG をライブ表示。:w(BufWritePost)で SVG 再生成 → Vivify が file-watch
---           でリロード → 右が自動更新。
---   ※ Streamlit の中に端末を埋めない: 自動再実行のたびに iframe がリロードして端末が再接続を
---     繰り返すため。専用の静的 HTML を挟むことで端末 iframe は繋ぎっぱなしにできる。
+-- studio = 前からある Streamlit の 2ペインページ。ソース部の Ace を本物の nvim に差し替えた版:
+--   ・左  : ttyd(127.0.0.1:7690) → tmux で nvim を永続起動。設定そのまま=pyright 補完が効く。
+--           ブラウザ/ttyd が落ちても tmux セッションに再アタッチするので編集状態は残る。
+--   ・右  : Vivify が対象 SVG をライブ表示。nvim の :w(BufWritePost)で SVG 再生成 → 右が更新。
+--   ・ツールバー(テンプレ/📋コピー)は Streamlit 側(studio.py)に残す。
+--   ※ ページ再描画はツールバー操作時のみ。編集中(vim)は再描画されないので端末は繋ぎっぱなし。
 --
 -- 方式は draw.io と同思想(SVG固定・<metadata> にソース埋込・round-trip):
 --   ・新規: :Studio [schemdraw|matplotlib|svg] → 現 md/typst の assets に <ts>.fig.svg を作り
---           リンク挿入、テンプレを載せて studio ページを開く。
---   ・編集: ![](x.svg) 上で ,,e → 埋込ソースを復元して studio ページを開く → :w で上書き。
+--           リンク挿入、テンプレを載せて studio を開く。
+--   ・編集: ![](x.svg) 上で ,,e → 埋込ソースを復元して studio を開く → :w で上書き。
 
 local M = {}
 
 local TTYD_PORT = 7690           -- 7681 は既存サービスが居るので避ける
-local VIV_PORT = 31622
+local STUDIO_PORT = 8501         -- Streamlit
+local VIV_PORT = 31622           -- Vivify
 local TMUX_SESSION = 'figstudio'
 local RENDER_PY = vim.fn.expand('~/.config/nvim/vivify/render/render_schemdraw.py')
+local STUDIO_PY = vim.fn.expand('~/.config/nvim/vivify/render/studio.py')
 local VIV_SERVER = vim.fn.expand('~/.local/bin/vivify-server')
 local CACHE = vim.fn.stdpath('cache') .. '/figstudio'
 
--- テンプレ(自己完結・`out`(SVGパス)に SVG を書けば何でも可)。補完は pyright に任せるので
--- シードコメントは付けない(ソースをクリーンに保つ)。
+-- テンプレ(自己完結・`out`(SVGパス)に SVG を書けば何でも可)。補完は pyright に任せる。
 local TEMPLATES = {
     schemdraw = table.concat({
         "import schemdraw",
@@ -57,7 +56,6 @@ local TEMPLATES = {
     }, "\n"),
 }
 
--- SVG に我々の埋込ソースマーカーがあるか(先頭のみ読む)
 local function has_source(svg_path)
     local f = io.open(svg_path, 'r')
     if not f then return false end
@@ -66,7 +64,6 @@ local function has_source(svg_path)
     return head:find('id="diagram%-source"') ~= nil
 end
 
--- SVG の <metadata id="diagram-source"> から元 Python ソースを取り出す(CDATA 無害化を戻す)
 local function extract_source(svg_path)
     local f = io.open(svg_path, 'r')
     if not f then return nil end
@@ -89,8 +86,7 @@ local function py_for(target)
     return CACHE .. '/' .. base .. '-' .. vim.fn.sha256(target):sub(1, 8) .. '.py'
 end
 
--- バッファ内容から SVG を再生成(render_schemdraw の CLI に stdin で渡す)。
--- studio ページ内の nvim(ttyd)から :w のたびに呼ばれる。
+-- バッファ内容から SVG を再生成。studio 内の nvim(ttyd)から :w のたびに呼ばれる。
 local function regen(bufnr)
     local target = vim.b[bufnr].fig_target
     if not target or target == '' then return end
@@ -103,7 +99,7 @@ local function regen(bufnr)
     end
 end
 
--- studio ページ内の nvim が起動時に呼ぶ: 対象 SVG を結び付け、:w で再生成させる。
+-- studio 内の nvim が起動時に呼ぶ: 対象 SVG を結び付け、:w で再生成させる。
 function M.attach(svg)
     local bufnr = vim.api.nvim_get_current_buf()
     vim.b[bufnr].fig_target = svg
@@ -120,29 +116,24 @@ local function ensure_vivify()
     end
 end
 
--- studio ページを開く: 左=ttyd(tmux+nvim) / 右=Vivify(svg)。
-function M.studio(target, source)
-    target = vim.fn.fnamemodify(target, ':p')
-    vim.fn.mkdir(CACHE, 'p')
-    local py = py_for(target)
-    vim.fn.writefile(vim.split(source, '\n', { plain = true }), py)
+-- Streamlit studio が稼働中か(health を同期 curl・短タイムアウト)
+local function studio_up()
+    local out = vim.fn.system(
+        { 'curl', '-s', '-m', '1', 'http://localhost:' .. STUDIO_PORT .. '/_stcore/health' }
+    )
+    return vim.trim(out) == 'ok'
+end
 
-    -- 右ペイン用に初回 SVG を生成(失敗しても :w で作り直せる)
-    vim.fn.system({ 'python3', RENDER_PY, target }, source)
-    ensure_vivify()
-
-    -- 左ペイン: ttyd が tmux 経由で nvim を起動(永続セッション)。
-    -- inner.sh に nvim 起動を書いて多重クォートを回避。
-    local nvim = vim.v.progpath
+-- 左ペイン: ttyd が tmux 経由で nvim を起動(永続セッション)。多重クォート回避に inner.sh を使う。
+local function start_ttyd(target, py)
     local inner = CACHE .. '/inner.sh'
     vim.fn.writefile({
         '#!/bin/sh',
-        'exec ' .. vim.fn.shellescape(nvim)
+        'exec ' .. vim.fn.shellescape(vim.v.progpath)
             .. " -c 'lua require(\"diagram\").attach(\"" .. target .. "\")' "
             .. vim.fn.shellescape(py),
     }, inner)
     vim.fn.setfperm(inner, 'rwxr-xr-x')
-
     if M._ttyd and M._ttyd > 0 then pcall(vim.fn.jobstop, M._ttyd) end
     vim.fn.system({ 'tmux', 'kill-session', '-t', TMUX_SESSION }) -- 前回分を掃除(無ければ無害)
     M._ttyd = vim.fn.jobstart({
@@ -150,27 +141,33 @@ function M.studio(target, source)
         '-t', 'fontSize=15', '-t', 'disableLeaveAlert=true',
         'tmux', 'new-session', '-A', '-s', TMUX_SESSION, inner,
     }, { detach = true })
+end
 
-    -- ラッパー HTML(左=ttyd / 右=Vivify svg)
-    local right = string.format('http://localhost:%d/viewer%s', VIV_PORT, target)
-    local left = string.format('http://localhost:%d/', TTYD_PORT)
-    local html = CACHE .. '/studio.html'
-    vim.fn.writefile({
-        '<!doctype html><html><head><meta charset="utf-8"><title>figure studio</title>',
-        '<style>html,body{margin:0;height:100%}',
-        '.wrap{display:flex;height:100vh}',
-        '.wrap>iframe{flex:1;height:100%;border:0}',
-        '.wrap>iframe.right{background:#fff}</style></head>',
-        '<body><div class="wrap">',
-        '<iframe src="' .. left .. '"></iframe>',
-        '<iframe class="right" src="' .. right .. '"></iframe>',
-        '</div></body></html>',
-    }, html)
+-- studio を開く: 左=ttyd(tmux+nvim) / 右=Vivify(svg)。Streamlit がツールバー+レイアウトを担う。
+function M.studio(target, source)
+    target = vim.fn.fnamemodify(target, ':p')
+    vim.fn.mkdir(CACHE, 'p')
+    local py = py_for(target)
+    vim.fn.writefile(vim.split(source, '\n', { plain = true }), py)
 
-    -- ttyd/vivify が listen するまで少し待ってからブラウザで開く
+    vim.fn.system({ 'python3', RENDER_PY, target }, source) -- 右ペイン用に初回 SVG
+    ensure_vivify()
+    start_ttyd(target, py)
+
+    local up = studio_up()
+    if not up then
+        vim.fn.jobstart({
+            'python3', '-m', 'streamlit', 'run', STUDIO_PY,
+            '--server.headless=true', '--server.port=' .. STUDIO_PORT,
+            '--browser.gatherUsageStats=false',
+        }, { detach = true })
+    end
+
+    local url = string.format('http://localhost:%d/?svg=%s&py=%s&ttyd=%d',
+        STUDIO_PORT, target, py, TTYD_PORT)
     vim.defer_fn(function()
-        vim.fn.jobstart({ 'wslview', html }, { detach = true })
-    end, 1800)
+        vim.fn.jobstart({ 'wslview', url }, { detach = true })
+    end, up and 400 or 4000) -- streamlit/ttyd/vivify の listen 待ち
     vim.notify('studio: ' .. vim.fn.fnamemodify(target, ':t') .. '（左=nvim/右=SVG, :w で更新）',
         vim.log.levels.INFO)
 end
@@ -209,7 +206,7 @@ function M.setup()
     end, {
         nargs = '?',
         complete = function() return { 'schemdraw', 'matplotlib', 'svg' } end,
-        desc = 'figure studio: 新規図を作成(左=nvim/右=SVG の web ページ)',
+        desc = 'figure studio: 新規図を作成(左=nvim/右=SVG)',
     })
 end
 
