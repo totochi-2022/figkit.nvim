@@ -3,7 +3,8 @@
 -- studio = 前からある Streamlit の 2ペインページ。ソース部の Ace を本物の nvim に差し替えた版:
 --   ・左  : ttyd(127.0.0.1:7690) → tmux で nvim を永続起動。設定そのまま=pyright 補完が効く。
 --           ブラウザ/ttyd が落ちても tmux セッションに再アタッチするので編集状態は残る。
---   ・右  : Vivify が対象 SVG をライブ表示。nvim の :w(BufWritePost)で SVG 再生成 → 右が更新。
+--   ・右  : studio.py が対象 SVG を白ボックスで表示。st.fragment(run_every)で右だけ 1秒ごとに
+--           読み直すので、nvim の :w(BufWritePost で再生成)が反映される(左の端末は再描画しない)。
 --   ・ツールバー(テンプレ/📋コピー)は Streamlit 側(studio.py)に残す。
 --   ※ ページ再描画はツールバー操作時のみ。編集中(vim)は再描画されないので端末は繋ぎっぱなし。
 --
@@ -16,11 +17,9 @@ local M = {}
 
 local TTYD_PORT = 7690           -- 7681 は既存サービスが居るので避ける
 local STUDIO_PORT = 8501         -- Streamlit
-local VIV_PORT = 31622           -- Vivify
 local TMUX_SESSION = 'figstudio'
 local RENDER_PY = vim.fn.expand('~/.config/nvim/vivify/render/render_schemdraw.py')
 local STUDIO_PY = vim.fn.expand('~/.config/nvim/vivify/render/studio.py')
-local VIV_SERVER = vim.fn.expand('~/.local/bin/vivify-server')
 local CACHE = vim.fn.stdpath('cache') .. '/figstudio'
 
 -- テンプレ(自己完結・`out`(SVGパス)に SVG を書けば何でも可)。補完は pyright に任せる。
@@ -110,12 +109,6 @@ function M.attach(svg)
     })
 end
 
-local function ensure_vivify()
-    if vim.fn.executable(VIV_SERVER) == 1 then
-        vim.fn.jobstart({ VIV_SERVER }, { detach = true }) -- 起動済みなら即終了(二重起動しない)
-    end
-end
-
 -- Streamlit studio が稼働中か(health を同期 curl・短タイムアウト)
 local function studio_up()
     local out = vim.fn.system(
@@ -125,11 +118,15 @@ local function studio_up()
 end
 
 -- 左ペイン: ttyd が tmux 経由で nvim を起動(永続セッション)。多重クォート回避に inner.sh を使う。
-local function start_ttyd(target, py)
+-- nvim は --listen <sock> で RPC を受ける(テンプレ挿入で --remote-expr により :e!|w させるため。
+-- tmux send-keys は noice の cmdline ポップアップにキーを取りこぼすので使わない)。
+local function start_ttyd(target, py, sock)
     local inner = CACHE .. '/inner.sh'
     vim.fn.writefile({
         '#!/bin/sh',
+        'rm -f ' .. vim.fn.shellescape(sock), -- 古い socket を掃除(新規セッション時のみ実行される)
         'exec ' .. vim.fn.shellescape(vim.v.progpath)
+            .. ' --listen ' .. vim.fn.shellescape(sock)
             .. " -c 'lua require(\"diagram\").attach(\"" .. target .. "\")' "
             .. vim.fn.shellescape(py),
     }, inner)
@@ -148,11 +145,11 @@ function M.studio(target, source)
     target = vim.fn.fnamemodify(target, ':p')
     vim.fn.mkdir(CACHE, 'p')
     local py = py_for(target)
+    local sock = (py:gsub('%.py$', '')) .. '.sock'
     vim.fn.writefile(vim.split(source, '\n', { plain = true }), py)
 
     vim.fn.system({ 'python3', RENDER_PY, target }, source) -- 右ペイン用に初回 SVG
-    ensure_vivify()
-    start_ttyd(target, py)
+    start_ttyd(target, py, sock)
 
     local up = studio_up()
     if not up then
@@ -163,8 +160,8 @@ function M.studio(target, source)
         }, { detach = true })
     end
 
-    local url = string.format('http://localhost:%d/?svg=%s&py=%s&ttyd=%d',
-        STUDIO_PORT, target, py, TTYD_PORT)
+    local url = string.format('http://localhost:%d/?svg=%s&py=%s&ttyd=%d&sock=%s',
+        STUDIO_PORT, target, py, TTYD_PORT, sock)
     vim.defer_fn(function()
         vim.fn.jobstart({ 'wslview', url }, { detach = true })
     end, up and 400 or 4000) -- streamlit/ttyd/vivify の listen 待ち

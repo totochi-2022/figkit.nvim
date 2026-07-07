@@ -19,9 +19,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import streamlit as st
 import streamlit.components.v1 as components
 
-TMUX_SESSION = "figstudio"
-VIV_PORT = 31622
-
 # テンプレ(自己完結・`out`(SVGパス)に SVG を書けば何でも可)。補完は pyright に任せるので
 # シードコメントは付けない(ソースはクリーンに保つ)。
 TEMPLATES = {
@@ -54,10 +51,16 @@ TEMPLATES = {
 }
 
 
-def reload_vim():
-    """nvim(tmux)に :e!(ディスクから再読込)→ :w(=再生成) を送る。テンプレ差し替え用。"""
-    for keys in (["Escape"], [":e!", "Enter"], [":w", "Enter"]):
-        subprocess.run(["tmux", "send-keys", "-t", TMUX_SESSION, *keys], check=False)
+def reload_vim(sock):
+    """nvim(--listen sock)へ RPC で edit!(ディスク再読込)→write(=再生成) を実行させる。
+    tmux send-keys は noice の cmdline ポップアップにキーを取りこぼすので RPC を使う。"""
+    if not sock:
+        return
+    subprocess.run(
+        ["nvim", "--server", sock, "--remote-expr", 'execute("edit! | write")'],
+        check=False,
+        capture_output=True,
+    )
 
 
 st.set_page_config(page_title="figure studio", layout="wide")
@@ -65,6 +68,7 @@ st.set_page_config(page_title="figure studio", layout="wide")
 target = st.query_params.get("svg", "")
 pyfile = st.query_params.get("py", "")
 ttyd_port = st.query_params.get("ttyd", "7690")
+sock = st.query_params.get("sock", "")
 
 st.title("figure studio — nvim → SVG")
 
@@ -81,7 +85,7 @@ with t2:
         try:
             with open(pyfile, "w", encoding="utf-8") as f:
                 f.write(TEMPLATES[st.session_state.tpl_sel])
-            reload_vim()  # vim に読み直させて :w → 右が更新
+            reload_vim(sock)  # RPC で vim に読み直させて write → 右が更新
             st.toast("テンプレを挿入（vim をリロード）")
         except OSError as e:
             st.error(f"テンプレ挿入に失敗: {e}")
@@ -112,10 +116,29 @@ with t3:
         height=46,
     )
 
+@st.fragment(run_every="1s")
+def preview(svg_path):
+    """右ペインだけ 1秒ごとに再実行して SVG を読み直す(ページ全体=左の端末は再描画しない)。
+    内容が変わらなければ Streamlit の差分照合で iframe は張り直されず、チラつかない。"""
+    try:
+        svg_now = open(svg_path, encoding="utf-8").read()
+    except OSError:
+        svg_now = ""
+    if svg_now:
+        components.html(
+            '<div style="background:#fff;padding:8px;display:flex;justify-content:center">'
+            + svg_now + "</div>",
+            height=560,
+            scrolling=True,
+        )
+    else:
+        st.info("まだ SVG がありません（左の nvim で `:w`）")
+
+
 left, right = st.columns(2, gap="small")
 with left:
     st.caption("source — nvim（pyright 補完・`:w` で右に反映）")
     components.iframe(f"http://localhost:{ttyd_port}/", height=560)
 with right:
-    st.caption("preview — ライブSVG")
-    components.iframe(f"http://localhost:{VIV_PORT}/viewer{target}", height=560)
+    st.caption("preview — SVG（`:w` で更新）")
+    preview(target)
