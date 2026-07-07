@@ -22,12 +22,14 @@ local RENDER_PY = vim.fn.expand('~/.config/nvim/vivify/render/render_schemdraw.p
 local STUDIO_PY = vim.fn.expand('~/.config/nvim/vivify/render/studio.py')
 local CACHE = vim.fn.stdpath('cache') .. '/figstudio'
 
--- テンプレ(自己完結・`out`(SVGパス)に SVG を書けば何でも可)。補完は pyright に任せる。
+-- テンプレ(自己完結・`out` に保存すれば何でも可。out の拡張子で svg/png/jpg が決まる)。
+-- 補完は pyright に任せる。schemdraw は svg 出力のときだけ svg バックエンド(png は matplotlib)。
 local TEMPLATES = {
     schemdraw = table.concat({
         "import schemdraw",
         "import schemdraw.elements as elm",
-        "schemdraw.use('svg')",
+        "if out.endswith('.svg'):",
+        "    schemdraw.use('svg')",
         "d = schemdraw.Drawing(show=False)",
         "d += elm.Resistor().label('R1')",
         "d += elm.Capacitor().label('C1').down()",
@@ -46,7 +48,7 @@ local TEMPLATES = {
         "plt.savefig(out)",
         "",
     }, "\n"),
-    svg = table.concat({
+    raw = table.concat({
         "open(out, 'w').write('''<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"140\" height=\"60\">",
         "<rect x=\"10\" y=\"10\" width=\"120\" height=\"40\" rx=\"6\" fill=\"#5599cc\"/>",
         "<text x=\"70\" y=\"36\" text-anchor=\"middle\" fill=\"white\" font-family=\"sans-serif\">hello</text>",
@@ -55,22 +57,12 @@ local TEMPLATES = {
     }, "\n"),
 }
 
-local function has_source(svg_path)
-    local f = io.open(svg_path, 'r')
-    if not f then return false end
-    local head = f:read(8192) or ''
-    f:close()
-    return head:find('id="diagram%-source"') ~= nil
-end
-
-local function extract_source(svg_path)
-    local f = io.open(svg_path, 'r')
-    if not f then return nil end
-    local s = f:read('*a')
-    f:close()
-    local body = s:match('<metadata id="diagram%-source"[^>]*><!%[CDATA%[(.-)%]%]></metadata>')
-    if not body then return nil end
-    return (body:gsub('%]%]%]%]><!%[CDATA%[>', ']]>'))
+-- 画像(svg/png/jpg)に埋め込んだ元ソースを取り出す。無ければ nil(=我々の図でない)。
+-- svg は metadata、png は tEXt、jpg は COM。判定/取り出しは render CLI(--extract)に一任。
+local function extract_source(path)
+    local src = vim.fn.system({ 'python3', RENDER_PY, '--extract', path })
+    if vim.v.shell_error ~= 0 or src == '' then return nil end
+    return src
 end
 
 local function resolve(path)
@@ -170,17 +162,19 @@ function M.studio(target, source)
         vim.log.levels.INFO)
 end
 
--- :Studio [kind] — 新規図を現 md/typst に作成して studio を開く
-function M.new(kind)
+-- :Studio [template] [fmt] — 新規図を現 md/typst に作成して studio を開く。
+-- template ∈ {schemdraw,matplotlib,raw}(既定 schemdraw) / fmt ∈ {svg,png}(既定 svg)。
+function M.new(kind, fmt)
     local base = vim.fn.expand('%:p:h')
     if base == '' or vim.bo.buftype ~= '' then
         vim.notify('名前付きの md/typst バッファで実行してください', vim.log.levels.WARN)
         return
     end
+    fmt = fmt or 'svg'
     local dir = base .. '/assets'
     vim.fn.mkdir(dir, 'p')
     local ts = os.date('%Y%m%d-%H%M%S')
-    local fname = ts .. '.fig.svg'
+    local fname = ts .. '.fig.' .. fmt
     local target = dir .. '/' .. fname
     local is_typst = vim.bo.filetype == 'typst' or vim.fn.expand('%:e') == 'typ'
     local link = is_typst and ('#image("assets/' .. fname .. '")') or ('![](assets/' .. fname .. ')')
@@ -188,23 +182,34 @@ function M.new(kind)
     M.studio(target, TEMPLATES[kind] or TEMPLATES.schemdraw)
 end
 
--- OpenDrawio(,,e)から: 埋込ソース付き SVG なら studio を開いて true。違えば false(→draw.io)。
+-- OpenDrawio(,,e)から: 埋込ソース付き画像(svg/png/jpg)なら studio を開いて true。違えば false(→draw.io)。
 function M.try_edit_file(path)
-    if not path or not path:match('%.svg$') then return false end
+    if not path or not path:match('%.svg$') and not path:match('%.png$') and not path:match('%.jpe?g$') then
+        return false
+    end
     local abs = resolve(path)
     if vim.fn.filereadable(abs) == 0 then return false end
-    if not has_source(abs) then return false end
-    M.studio(abs, extract_source(abs) or TEMPLATES.schemdraw)
+    local src = extract_source(abs)
+    if not src then return false end
+    M.studio(abs, src)
     return true
 end
 
 function M.setup()
     vim.api.nvim_create_user_command('Studio', function(o)
-        M.new(o.args ~= '' and o.args or nil)
+        local kind, fmt
+        for _, a in ipairs(o.fargs) do
+            if TEMPLATES[a] then
+                kind = a
+            elseif a == 'svg' or a == 'png' or a == 'jpg' then
+                fmt = a
+            end
+        end
+        M.new(kind, fmt)
     end, {
-        nargs = '?',
-        complete = function() return { 'schemdraw', 'matplotlib', 'svg' } end,
-        desc = 'figure studio: 新規図を作成(左=nvim/右=SVG)',
+        nargs = '*',
+        complete = function() return { 'schemdraw', 'matplotlib', 'raw', 'svg', 'png' } end,
+        desc = 'figure studio: 新規図を作成 :Studio [schemdraw|matplotlib|raw] [svg|png]',
     })
 end
 

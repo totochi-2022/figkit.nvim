@@ -10,6 +10,7 @@ Ace の代わりに本物の nvim を左ペインに埋める版:
 ページの再描画はツールバー操作時のみ。編集中(vim)は再描画されないので端末は繋ぎっぱなし。
 再描画で端末 iframe が張り直されても tmux セッションに再アタッチするので状態は残る。
 """
+import base64
 import json
 import os
 import subprocess
@@ -70,14 +71,14 @@ pyfile = st.query_params.get("py", "")
 ttyd_port = st.query_params.get("ttyd", "7690")
 sock = st.query_params.get("sock", "")
 
-st.title("figure studio — nvim → SVG")
+st.title("figure studio — nvim → 図（SVG/PNG）")
 
 if not target or not pyfile:
     st.warning("nvim から `:Studio` / `,,e` で開いてください（?svg= と ?py= が必要）。")
     st.stop()
 
 # 保存先 SVG を明示（左の nvim で :w すると ここに再生成/保存される）
-st.caption(f"💾 保存先 SVG: `{target}` — 左の nvim で `:w` すると再生成・保存")
+st.caption(f"💾 保存先: `{target}` — 左の nvim で `:w` すると再生成・保存")
 
 # ツールバー: テンプレ選択+挿入（📋コピーは右ペインの fragment 内=エラー時は出さない）
 t1, t2 = st.columns([4, 1], vertical_alignment="bottom")
@@ -113,10 +114,18 @@ COPY_BTN = """
 """
 
 
+def _box(inner):
+    return (
+        '<div style="background:#fff;padding:8px;display:flex;justify-content:center">'
+        + inner + "</div>"
+    )
+
+
 @st.fragment(run_every="1s")
-def preview(svg_path, py_path):
+def preview(img_path, py_path):
     """右ペインだけ 1秒ごとに再実行(左の端末は再描画しない)。生成エラー時(=<py>.err がある)は
-    画像もコピーも出さず、エラーだけ表示する(古い画像を残さない・壊れた SVG をコピーさせない)。"""
+    画像もコピーも出さず、エラーだけ表示する(古い画像を残さない・壊れた出力を触らせない)。
+    svg は文字列を inline(＋📋テキストコピー)、png/jpg は base64 の <img> で表示。"""
     errfile = py_path + ".err"
     if os.path.exists(errfile):
         try:
@@ -125,20 +134,30 @@ def preview(svg_path, py_path):
             msg = ""
         st.error("⚠ 生成エラー（左の nvim で直して `:w`）\n\n" + msg)
         return
-    try:
-        svg_now = open(svg_path, encoding="utf-8").read()
-    except OSError:
-        svg_now = ""
-    if not svg_now:
-        st.info("まだ SVG がありません（左の nvim で `:w`）")
-        return
-    components.html(
-        '<div style="background:#fff;padding:8px;display:flex;justify-content:center">'
-        + svg_now + "</div>",
-        height=510,
-        scrolling=True,
-    )
-    components.html(COPY_BTN.replace("__SVG__", json.dumps(svg_now)), height=44)
+    ext = os.path.splitext(img_path)[1].lower()
+    if ext in ("", ".svg"):
+        try:
+            svg_now = open(img_path, encoding="utf-8").read()
+        except OSError:
+            svg_now = ""
+        if not svg_now:
+            st.info("まだ SVG がありません（左の nvim で `:w`）")
+            return
+        components.html(_box(svg_now), height=510, scrolling=True)
+        components.html(COPY_BTN.replace("__SVG__", json.dumps(svg_now)), height=44)
+    else:
+        try:
+            data = open(img_path, "rb").read()
+        except OSError:
+            data = b""
+        if not data:
+            st.info("まだ画像がありません（左の nvim で `:w`）")
+            return
+        mime = "image/png" if ext == ".png" else "image/jpeg"
+        b64 = base64.b64encode(data).decode()
+        img = f'<img src="data:{mime};base64,{b64}" style="max-width:100%;height:auto">'
+        components.html(_box(img), height=520, scrolling=True)
+        # png/jpg は :Studio で既に md に ![] 挿入済み。テキストコピー不可なので 📋 は出さない。
 
 
 left, right = st.columns(2, gap="small")
@@ -146,5 +165,5 @@ with left:
     st.caption("source — nvim（pyright 補完・`:w` で右に反映）")
     components.iframe(f"http://localhost:{ttyd_port}/", height=560)
 with right:
-    st.caption("preview — SVG（`:w` で更新 / エラー時は非表示）")
+    st.caption("preview — 図（`:w` で更新 / エラー時は非表示）")
     preview(target, pyfile)

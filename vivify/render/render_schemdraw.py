@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""schemdraw スニペットを SVG 化し、元ソースを <metadata> に埋め込む。
+"""Python スニペットを実行して画像化し、元ソースを埋め込む(draw.io 方式 round-trip)。
 
-- CLI:   python3 render_schemdraw.py <out.svg> < snippet    （nvim の :DiagramRender 用）
-- module: from render_schemdraw import render               （studio.py 用）
-           svg, err = render(source)
+- 生成:   python3 render_schemdraw.py <out.(svg|png|jpg)> [errfile] < snippet
+          出力の拡張子で形式を決定。namespace に `out`(その拡張子の一時ファイル)を渡すので、
+          スニペットは自己完結(import 含む)で `out` に保存すればよい:
+              d.save(out) / plt.savefig(out) / open(out,'w').write(svg) など。
+          元ソースを埋め込む:  SVG=<metadata> / PNG=tEXt チャンク / JPEG=COM コメント。
+- 取出し: python3 render_schemdraw.py --extract <file>   → 埋め込みソースを stdout(無ければ空)。
 
-生成 SVG は <svg> 直後に
-    <metadata id="diagram-source" data-type="schemdraw"><![CDATA[...source...]]></metadata>
-を挿入（draw.io 方式の round-trip 用）。ブラウザ/GitHub は metadata を無視して描画。
-スニペットは exec する（＝任意コード実行）ので信頼できる入力のみ（ローカル専用）。
-スコープに schemdraw / elm / d(Drawing, show=False) を用意済み。例: d += elm.Resistor().label('R1')
+スニペットは exec する(=任意コード実行)ので信頼できる入力のみ(ローカル専用)。
 """
 import os
+import re
+import shutil
 import sys
+import tempfile
 import textwrap
+
+_META_RE = re.compile(
+    r'<metadata id="diagram-source"[^>]*><!\[CDATA\[(.*?)\]\]></metadata>', re.S
+)
 
 
 def _brief(e):
@@ -22,6 +28,7 @@ def _brief(e):
         loc = f" (line {e.lineno})" if e.lineno else ""
         return f"{type(e).__name__}: {e.msg}{loc}"
     import traceback
+
     line = None
     for fr in traceback.extract_tb(e.__traceback__):
         if fr.filename == "<string>":
@@ -30,63 +37,93 @@ def _brief(e):
     return f"{type(e).__name__}: {e}{loc}"
 
 
-def render(source):
-    """Python スニペット → (svg_str, None) または (None, error_msg)。
-
-    方式: namespace に `out`(一時 .svg パス)だけ渡す。スニペットは自己完結（import 含む）で
-    `out` に SVG を書く。ライブラリ非依存で何でも可:
-        d.save(out) / plt.savefig(out) / chart.render_to_file(out) / open(out,'w').write(svg)
-    生成 SVG には元ソース(dedent 済)を <metadata> に埋め込む(round-trip 用)。
-    """
-    import os
-    import tempfile
-
+def render_file(source, target):
+    """source を exec し、target(拡張子で形式決定)に画像を書く。元ソースを埋め込む。
+    成功で None、失敗でエラーメッセージ1行を返す(失敗時 target は上書きしない=前の正常版を保持)。"""
     source = textwrap.dedent(source)  # 一様インデント除去(相対は保持)
+    ext = os.path.splitext(target)[1].lower()
 
-    fd, out = tempfile.mkstemp(suffix=".svg")
+    fd, out = tempfile.mkstemp(suffix=(ext or ".svg"))
     os.close(fd)
-    ns = {"out": out}
     try:
+        ns = {"out": out}
         try:
             exec(source, ns)  # noqa: S102  (ローカル専用・信頼入力前提)
         except Exception as e:  # noqa: BLE001
-            return None, _brief(e)
+            return _brief(e)
         if os.path.getsize(out) == 0:
-            return None, (
-                "出力なし（out に SVG を保存してください。"
-                "例: d.save(out) / plt.savefig(out) / open(out,'w').write(svg)）"
+            return "出力なし（out に保存してください。例: d.save(out) / plt.savefig(out)）"
+
+        if ext in ("", ".svg"):
+            svg = open(out, encoding="utf-8", errors="replace").read()
+            if "<svg" not in svg:
+                return "SVG ではありません（out に SVG を書いてください）"
+            safe = source.replace("]]>", "]]]]><![CDATA[>")  # CDATA を壊す ]]> を無害化
+            meta = (
+                '<metadata id="diagram-source" data-type="python">'
+                "<![CDATA[" + safe + "]]></metadata>"
             )
-        svg = open(out, encoding="utf-8", errors="replace").read()
+            i = svg.find(">")
+            if i == -1:
+                return "SVG が不正(<svg> が見つからない)"
+            with open(target, "w", encoding="utf-8") as f:
+                f.write(svg[: i + 1] + "\n" + meta + "\n" + svg[i + 1:])
+        elif ext == ".png":
+            from PIL import Image, PngImagePlugin
+
+            info = PngImagePlugin.PngInfo()
+            info.add_text("diagram-source", source)  # tEXt チャンクに埋込
+            Image.open(out).save(target, pnginfo=info)
+        elif ext in (".jpg", ".jpeg"):
+            from PIL import Image
+
+            # COM コメントに埋込(EXIF UserComment は encoding で不安定なので使わない)
+            Image.open(out).save(target, comment=source.encode("utf-8"))
+        else:
+            shutil.copyfile(out, target)  # 未知拡張子は素通し(埋込なし)
+        return None
     finally:
         try:
             os.unlink(out)
         except OSError:
             pass
 
-    if "<svg" not in svg:
-        return None, "SVG ではありません（out に SVG を書いてください）"
 
-    # 元ソースを <metadata> に埋込。CDATA を壊す ]]> は無害化。
-    safe = source.replace("]]>", "]]]]><![CDATA[>")
-    meta = (
-        '<metadata id="diagram-source" data-type="python">'
-        "<![CDATA[" + safe + "]]></metadata>"
-    )
-    i = svg.find(">")
-    if i == -1:
-        return None, "SVG が不正(<svg> が見つからない)"
-    return svg[: i + 1] + "\n" + meta + "\n" + svg[i + 1:], None
+def extract_source(path):
+    """画像に埋め込んだ元ソースを取り出す(svg/png/jpg)。無ければ空文字。"""
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext in ("", ".svg"):
+            m = _META_RE.search(open(path, encoding="utf-8", errors="replace").read())
+            return m.group(1).replace("]]]]><![CDATA[>", "]]>") if m else ""
+        if ext == ".png":
+            from PIL import Image
+
+            return Image.open(path).text.get("diagram-source", "") or ""
+        if ext in (".jpg", ".jpeg"):
+            from PIL import Image
+
+            c = Image.open(path).info.get("comment")
+            return c.decode("utf-8") if isinstance(c, bytes) else (c or "")
+    except Exception:  # noqa: BLE001
+        return ""
+    return ""
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        sys.stderr.write("usage: render_schemdraw.py <out.svg> [errfile] < snippet\n")
+    args = sys.argv[1:]
+    if args and args[0] == "--extract":
+        if len(args) < 2:
+            return 2
+        sys.stdout.write(extract_source(args[1]))
+        return 0
+    if not args:
+        sys.stderr.write("usage: render_schemdraw.py <out.(svg|png|jpg)> [errfile] < snippet\n")
         return 2
-    out = sys.argv[1]
-    errfile = sys.argv[2] if len(sys.argv) > 2 else None  # studio 用のエラー状態 sidecar
-    svg, err = render(sys.stdin.read())
+    target = args[0]
+    errfile = args[1] if len(args) > 1 else None  # studio 用のエラー状態 sidecar
+    err = render_file(sys.stdin.read(), target)
     if err:
-        # 失敗: SVG は上書きせず(前の正常版を保持)、errfile にメッセージを残す
         if errfile:
             try:
                 with open(errfile, "w", encoding="utf-8") as f:
@@ -95,14 +132,12 @@ def main() -> int:
                 pass
         sys.stderr.write(err + "\n")
         return 4
-    with open(out, "w", encoding="utf-8") as f:
-        f.write(svg)
     if errfile:  # 成功: エラー状態を解除
         try:
             os.remove(errfile)
         except OSError:
             pass
-    print(out)
+    print(target)
     return 0
 
 
