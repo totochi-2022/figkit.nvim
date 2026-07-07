@@ -56,16 +56,18 @@ def render_file(source, target):
 
         if ext in ("", ".svg"):
             svg = open(out, encoding="utf-8", errors="replace").read()
-            if "<svg" not in svg:
+            j = svg.find("<svg")  # 先頭 <?xml?>/<!DOCTYPE> を飛ばして <svg> 本体を探す
+            if j == -1:
                 return "SVG ではありません（out に SVG を書いてください）"
+            i = svg.find(">", j)  # <svg …> 開始タグの閉じ '>'
+            if i == -1:
+                return "SVG が不正(<svg> の閉じが無い)"
             safe = source.replace("]]>", "]]]]><![CDATA[>")  # CDATA を壊す ]]> を無害化
             meta = (
                 '<metadata id="diagram-source" data-type="python">'
                 "<![CDATA[" + safe + "]]></metadata>"
             )
-            i = svg.find(">")
-            if i == -1:
-                return "SVG が不正(<svg> が見つからない)"
+            # metadata は <svg> の中(最初の子)に入れる。外に置くと不正な SVG になる。
             with open(target, "w", encoding="utf-8") as f:
                 f.write(svg[: i + 1] + "\n" + meta + "\n" + svg[i + 1:])
         elif ext == ".png":
