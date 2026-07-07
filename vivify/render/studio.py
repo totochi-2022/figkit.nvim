@@ -54,6 +54,7 @@ TEMPLATES = {
         "rdDepictor.Compute2DCoords(mol)\n"
         'svg = out.endswith(".svg")\n'
         "d = (rdMolDraw2D.MolDraw2DSVG if svg else rdMolDraw2D.MolDraw2DCairo)(400, 300)\n"
+        "# d.drawOptions().useBWAtomPalette()  # コメントを外すとモノクロ(既定は O=赤 等の元素色)\n"
         "d.DrawMolecule(mol)\n"
         "d.FinishDrawing()\n"
         'open(out, "w" if svg else "wb").write(d.GetDrawingText())\n'
