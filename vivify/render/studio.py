@@ -228,22 +228,30 @@ if "rdkit" in _pysrc:
     if do_search and query.strip():
         # PubChem PUG-REST(公式・キー不要)。CAS は名前(シノニム)として /name/ で引ける。
         endpoint = "inchikey" if kind == "InChIKey" else "name"
-        url = (
+        base = (
             "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/"
             + endpoint + "/" + urllib.parse.quote(query.strip(), safe="")
-            + "/property/SMILES/TXT"
         )
         with st.spinner("PubChem 照会中…"):
             try:
-                with urllib.request.urlopen(url, timeout=15) as r:
+                with urllib.request.urlopen(base + "/property/SMILES/TXT", timeout=15) as r:
                     lines = r.read().decode().strip().splitlines()
-                st.session_state.smi_result = lines[0] if lines else "（見つかりませんでした）"
+                if lines:
+                    st.session_state.smi_result = lines[0]
+                    st.session_state.smi_img = base + "/PNG?image_size=260x200"  # 確認用サムネ
+                else:
+                    st.session_state.smi_result = "（見つかりませんでした）"
+                    st.session_state.smi_img = None
             except urllib.error.HTTPError as e:
                 st.session_state.smi_result = (
                     "（見つかりませんでした）" if e.code == 404 else f"（HTTP {e.code}）"
                 )
+                st.session_state.smi_img = None
             except Exception as e:  # noqa: BLE001
                 st.session_state.smi_result = f"（検索エラー: {e}）"
+                st.session_state.smi_img = None
     if st.session_state.get("smi_result"):
         st.code(st.session_state.smi_result, language="text")
+    if st.session_state.get("smi_img"):
+        st.image(st.session_state.smi_img, caption="PubChem 2D構造（確認用）", width=260)
     st.caption("PubChem PUG-REST（公式・キー不要）。CAS は名前として検索。")
