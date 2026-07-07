@@ -199,3 +199,41 @@ with left:
 with right:
     st.caption("preview — 図（`:w` で更新 / エラー時は非表示）")
     preview(target, pyfile)
+
+# rdkit を使うソースのときだけ、下に SMILES 検索ツール(名前/CAS/InChI → SMILES)を出す。
+# ネットへ問い合わせるのは「検索」押下時だけ(描画ループとは無関係)。
+try:
+    _pysrc = open(pyfile, encoding="utf-8").read()
+except OSError:
+    _pysrc = ""
+if "rdkit" in _pysrc:
+    st.divider()
+    st.caption("🔎 SMILES 検索 — 名前 / CAS / InChI → SMILES")
+    q1, q2, q3 = st.columns([3, 1, 1], vertical_alignment="bottom")
+    with q1:
+        query = st.text_input(
+            "query", key="smi_q", label_visibility="collapsed",
+            placeholder="例: 50-78-2（CAS）/ aspirin（名前）/ InChI=...",
+        )
+    with q2:
+        idtype = st.selectbox(
+            "種別", ["cas", "name", "inchi", "inchikey"],
+            key="smi_type", label_visibility="collapsed",
+        )
+    with q3:
+        do_search = st.button("検索", use_container_width=True)
+    if do_search and query.strip():
+        with st.spinner("検索中（オンライン）…"):
+            try:
+                from moleculeresolver import MoleculeResolver
+
+                with MoleculeResolver() as mr:
+                    mol = mr.find_single_molecule([query.strip()], [idtype])
+                st.session_state.smi_result = (
+                    getattr(mol, "SMILES", None) or "（見つかりませんでした）"
+                )
+            except Exception as e:  # noqa: BLE001
+                st.session_state.smi_result = f"（検索エラー: {e}）"
+    if st.session_state.get("smi_result"):
+        st.code(st.session_state.smi_result, language="text")
+    st.caption("名前は同義語衝突で誤ることあり。CAS / InChI が確実。")
