@@ -71,7 +71,24 @@ pyfile = st.query_params.get("py", "")
 ttyd_port = st.query_params.get("ttyd", "7690")
 sock = st.query_params.get("sock", "")
 
-st.title("figure studio — nvim → 図（SVG/PNG）")
+st.markdown(
+    """
+    <div style="display:flex;align-items:center;gap:13px;margin:.1rem 0 .7rem">
+      <div style="width:8px;height:38px;border-radius:4px;
+                  background:linear-gradient(180deg,#5aa0e0,#9b6ce0)"></div>
+      <div style="line-height:1.08">
+        <div style="font-size:2rem;font-weight:800;letter-spacing:-.02em;
+                    background:linear-gradient(90deg,#5aa0e0 10%,#9b6ce0 90%);
+                    -webkit-background-clip:text;background-clip:text;
+                    -webkit-text-fill-color:transparent">figure&nbsp;studio</div>
+        <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.72rem;
+                    letter-spacing:.08em;color:#8b93a7;margin-top:3px">
+          nvim&nbsp;<span style="color:#9b6ce0">→</span>&nbsp;SVG&nbsp;·&nbsp;PNG</div>
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 if not target or not pyfile:
     st.warning("nvim から `:Studio` / `,,e` で開いてください（?svg= と ?py= が必要）。")
