@@ -15,6 +15,9 @@ import json
 import os
 import subprocess
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import streamlit as st
@@ -209,32 +212,38 @@ except OSError:
     _pysrc = ""
 if "rdkit" in _pysrc:
     st.divider()
-    st.caption("🔎 SMILES 検索 — 名前 / CAS / InChI → SMILES")
+    st.caption("🔎 SMILES 検索（PubChem）— 名前 / CAS / InChIKey → SMILES")
     q1, q2, q3 = st.columns([3, 1, 1], vertical_alignment="bottom")
     with q1:
         query = st.text_input(
             "query", key="smi_q", label_visibility="collapsed",
-            placeholder="例: 50-78-2（CAS）/ aspirin（名前）/ InChI=...",
+            placeholder="例: aspirin（名前）/ 50-78-2（CAS）/ InChIKey",
         )
     with q2:
-        idtype = st.selectbox(
-            "種別", ["cas", "name", "inchi", "inchikey"],
-            key="smi_type", label_visibility="collapsed",
+        kind = st.selectbox(
+            "種別", ["名前/CAS", "InChIKey"], key="smi_type", label_visibility="collapsed",
         )
     with q3:
         do_search = st.button("検索", use_container_width=True)
     if do_search and query.strip():
-        with st.spinner("検索中（オンライン）…"):
+        # PubChem PUG-REST(公式・キー不要)。CAS は名前(シノニム)として /name/ で引ける。
+        endpoint = "inchikey" if kind == "InChIKey" else "name"
+        url = (
+            "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/"
+            + endpoint + "/" + urllib.parse.quote(query.strip(), safe="")
+            + "/property/SMILES/TXT"
+        )
+        with st.spinner("PubChem 照会中…"):
             try:
-                from moleculeresolver import MoleculeResolver
-
-                with MoleculeResolver() as mr:
-                    mol = mr.find_single_molecule([query.strip()], [idtype])
+                with urllib.request.urlopen(url, timeout=15) as r:
+                    lines = r.read().decode().strip().splitlines()
+                st.session_state.smi_result = lines[0] if lines else "（見つかりませんでした）"
+            except urllib.error.HTTPError as e:
                 st.session_state.smi_result = (
-                    getattr(mol, "SMILES", None) or "（見つかりませんでした）"
+                    "（見つかりませんでした）" if e.code == 404 else f"（HTTP {e.code}）"
                 )
             except Exception as e:  # noqa: BLE001
                 st.session_state.smi_result = f"（検索エラー: {e}）"
     if st.session_state.get("smi_result"):
         st.code(st.session_state.smi_result, language="text")
-    st.caption("名前は同義語衝突で誤ることあり。CAS / InChI が確実。")
+    st.caption("PubChem PUG-REST（公式・キー不要）。CAS は名前として検索。")
