@@ -11,10 +11,12 @@ Ace の代わりに本物の nvim を左ペインに埋める版:
 再描画で端末 iframe が張り直されても tmux セッションに再アタッチするので状態は残る。
 """
 import base64
+import http.server
 import json
 import os
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -83,12 +85,57 @@ def reload_vim(sock):
     )
 
 
+JUMP_PORT = 8770  # プレビューの <text> クリック → nvim カーソル移動を受ける口
+
+
+@st.cache_resource
+def _jump_server():
+    """GET /jump?line=N を受けて nvim(--server sock) のカーソルを N 行目へ動かす小サーバ。
+    `st.cache_resource` でプロセスに1本だけ常駐(再実行しても再起動しない)。sock は毎 run で更新。
+    reload_vim(RPC)の逆方向。ツール非依存(行番号を動かすだけ)。"""
+    state = {"sock": ""}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            try:
+                u = urllib.parse.urlparse(self.path)
+                if u.path == "/jump":
+                    line = int(urllib.parse.parse_qs(u.query).get("line", ["0"])[0])
+                    sk = state["sock"]
+                    if line > 0 and sk:
+                        # --remote-send の normal-mode {line}G。cmdline を通らないので noice に
+                        # 食われず、<C-\><C-n> で hit-enter プロンプトも解除。remote-expr は
+                        # プロンプト中ブロックするので使わない。
+                        subprocess.run(
+                            ["nvim", "--server", sk, "--remote-send", f"<C-\\><C-n>{line}G"],
+                            check=False, capture_output=True, timeout=5,
+                        )
+            except Exception:  # noqa: BLE001,S110
+                pass
+            try:
+                self.send_response(204)
+                self.end_headers()
+            except Exception:  # noqa: BLE001,S110
+                pass
+
+        def log_message(self, *a):  # 静かに
+            return
+
+    try:
+        srv = http.server.HTTPServer(("127.0.0.1", JUMP_PORT), Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    except OSError:
+        pass  # 既に bind 済み等はジャンプ無効で続行
+    return state
+
+
 st.set_page_config(page_title="figure studio", layout="wide")
 
 target = st.query_params.get("svg", "")
 pyfile = st.query_params.get("py", "")
 ttyd_port = st.query_params.get("ttyd", "7690")
 sock = st.query_params.get("sock", "")
+_jump_server()["sock"] = sock  # クリックジャンプの宛先 nvim を最新化
 
 st.markdown(
     """
@@ -157,6 +204,52 @@ def _box(inner):
     )
 
 
+# プレビュー限定の JS(保存 SVG には焼き込まれない)。ツール非依存:
+#  ・lint: 全 <text> の bbox 総当たりで text×text の重なりに赤枠(視覚情報のみ)
+#  ・jump: 全 <text> をクリック可能に。textContent を埋込ソースから検索(クォート付き行を優先→
+#          部分一致)して行番号を /jump へ(no-cors fetch)→ nvim カーソル移動。複数一致は連打で巡回。
+OVERLAP_JUMP_JS = """
+<script>
+setTimeout(function(){
+  var svg = document.querySelector('svg');
+  if (!svg) return;
+  var SRC = __SRC__, PORT = __PORT__;
+  var lines = SRC.split('\\n');
+  var texts = Array.prototype.slice.call(svg.querySelectorAll('text'));
+  var bb = texts.map(function(t){ try { return t.getBBox(); } catch(e){ return null; } });
+  var hit = function(a,b){ return a&&b && !(a.x+a.width<b.x||b.x+b.width<a.x||a.y+a.height<b.y||b.y+b.height<a.y); };
+  for (var i=0;i<texts.length;i++) for (var j=i+1;j<texts.length;j++) if (hit(bb[i],bb[j])) {
+    [i,j].forEach(function(k){
+      var r = document.createElementNS(svg.namespaceURI,'rect');
+      r.setAttribute('x',bb[k].x); r.setAttribute('y',bb[k].y);
+      r.setAttribute('width',bb[k].width); r.setAttribute('height',bb[k].height);
+      r.setAttribute('fill','none'); r.setAttribute('stroke','red'); r.setAttribute('stroke-width','1');
+      r.setAttribute('pointer-events','none'); svg.appendChild(r);
+    });
+  }
+  var cyc = {};
+  var findLines = function(q){
+    var quoted = ["'"+q+"'", '"'+q+'"'], hits = [];
+    lines.forEach(function(ln,idx){ if (quoted.some(function(s){return ln.indexOf(s)>=0;})) hits.push(idx+1); });
+    if (!hits.length) lines.forEach(function(ln,idx){ if (q && ln.indexOf(q)>=0) hits.push(idx+1); });
+    return hits;
+  };
+  texts.forEach(function(t){
+    t.style.cursor = 'pointer';
+    t.addEventListener('mouseenter', function(){ t.style.opacity = '0.55'; });
+    t.addEventListener('mouseleave', function(){ t.style.opacity = '1'; });
+    t.addEventListener('click', function(){
+      var q = (t.textContent||'').trim(); if (!q) return;
+      var hits = findLines(q); if (!hits.length) return;
+      var n = (cyc[q]||0) % hits.length; cyc[q] = n + 1;
+      fetch('http://localhost:'+PORT+'/jump?line='+hits[n], {mode:'no-cors'}).catch(function(){});
+    });
+  });
+}, 60);
+</script>
+"""
+
+
 @st.fragment(run_every="1s")
 def preview(img_path, py_path):
     """右ペインだけ 1秒ごとに再実行(左の端末は再描画しない)。生成エラー時(=<py>.err がある)は
@@ -179,7 +272,14 @@ def preview(img_path, py_path):
         if not svg_now:
             st.info("まだ SVG がありません（左の nvim で `:w`）")
             return
-        components.html(_box(svg_now), height=510, scrolling=True)
+        try:
+            src_now = open(py_path, encoding="utf-8").read()
+        except OSError:
+            src_now = ""
+        js = OVERLAP_JUMP_JS.replace("__SRC__", json.dumps(src_now)).replace(
+            "__PORT__", str(JUMP_PORT)
+        )
+        components.html(_box(svg_now) + js, height=510, scrolling=True)
         components.html(COPY_BTN.replace("__SVG__", json.dumps(svg_now)), height=44)
     else:
         try:
