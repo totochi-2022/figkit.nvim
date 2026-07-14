@@ -213,6 +213,7 @@ OVERLAP_JUMP_JS = """
 setTimeout(function(){
   var svg = document.querySelector('svg');
   if (!svg) return;
+  svg.style.userSelect = 'none'; svg.style.webkitUserSelect = 'none';  // クリックで選択されないように
   var SRC = __SRC__, PORT = __PORT__;
   var lines = SRC.split('\\n');
   var texts = Array.prototype.slice.call(svg.querySelectorAll('text'));
@@ -236,6 +237,7 @@ setTimeout(function(){
   };
   texts.forEach(function(t){
     t.style.cursor = 'pointer';
+    t.addEventListener('mousedown', function(e){ e.preventDefault(); });  // ドラッグ選択の開始を抑止
     t.addEventListener('mouseenter', function(){ t.style.opacity = '0.55'; });
     t.addEventListener('mouseleave', function(){ t.style.opacity = '1'; });
     t.addEventListener('click', function(){
