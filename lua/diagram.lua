@@ -198,20 +198,85 @@ function M.new(kind, fmt)
     M.studio(target, TEMPLATES[kind] or TEMPLATES.schemdraw)
 end
 
--- OpenDrawio(,,e)から: 埋込ソース付き画像(svg/png/jpg)なら studio を開いて true。違えば false(→draw.io)。
+-- OpenDrawio(,,e)から: 埋込ソース付き画像(svg/png/jpg)なら軽量エディタ(edit_source)で開いて true。
+-- 違えば false(→呼び出し側が draw.io を開く)。識別は extract_source(=<metadata id="diagram-source">)。
+-- （旧: Streamlit studio を開いていたが、web ペイン内で完結する edit_source に変更）
 function M.try_edit_file(path)
     if not path or not path:match('%.svg$') and not path:match('%.png$') and not path:match('%.jpe?g$') then
         return false
     end
     local abs = resolve(path)
     if vim.fn.filereadable(abs) == 0 then return false end
-    local src = extract_source(abs)
-    if not src then return false end
-    M.studio(abs, src)
+    if not extract_source(abs) then return false end -- 我々の図でなければ draw.io に委ねる
+    M.edit_source(abs, vim.api.nvim_get_current_buf())
     return true
 end
 
+-- 埋め込みSVGの Python ソースを「編集用バッファ」で開く軽量版（Streamlit studio 不使用）。
+-- svg: 対象SVGの絶対パス / md_buf: それをリンクしている md バッファ（保存後の preview reload 先）。
+-- :w(BufWritePost) で SVG を再生成し、md の preview を cache-bust reload する。
+-- 目的: 埋め込みSVGは人がソースを直接いじれない（描画結果しか見えない）ので、Claude を介さない
+-- 手直しが今のサイクルだとできない。それを解消する。web/端末どちらでも動く（reload は localhost POST）。
+function M.edit_source(svg, md_buf)
+    svg = vim.fn.fnamemodify(svg, ':p')
+    if vim.fn.filereadable(svg) == 0 then
+        vim.notify('SVG が見つかりません: ' .. svg, vim.log.levels.WARN)
+        return
+    end
+    local src = extract_source(svg)
+    if not src then
+        -- draw.io は埋め込み方式が違う(.drawio.svg / <mxfile>)。識別して ,,e に誘導する。
+        local is_drawio = svg:match('%.drawio%.svg$') ~= nil
+        if not is_drawio then
+            local ok, head = pcall(vim.fn.readfile, svg, '', 60)
+            if ok then
+                for _, l in ipairs(head) do
+                    if l:match('mxfile') or l:match('mxGraphModel') then is_drawio = true; break end
+                end
+            end
+        end
+        if is_drawio then
+            vim.notify('draw.io 図です（埋込方式が別）。,,e で draw.io を開いてください: '
+                .. vim.fn.fnamemodify(svg, ':t'), vim.log.levels.WARN)
+        else
+            vim.notify('埋め込みソースが無い（studio/我々の生成物ではない）: ' .. svg, vim.log.levels.WARN)
+        end
+        return
+    end
+    local py = py_for(svg)
+    vim.fn.writefile(vim.split(src, '\n', { plain = true }), py)
+    vim.cmd('split ' .. vim.fn.fnameescape(py)) -- md を残して分割で開く（実ファイル=pyright 補完も効く）
+    local bufnr = vim.api.nvim_get_current_buf()
+    vim.b[bufnr].fig_target = svg
+    vim.b[bufnr].fig_md_buf = md_buf
+    vim.api.nvim_create_autocmd('BufWritePost', {
+        buffer = bufnr,
+        callback = function()
+            regen(bufnr) -- SVG + .err 再生成（エラー時は regen が notify する）
+            local mb = vim.b[bufnr].fig_md_buf
+            if mb and vim.api.nvim_buf_is_valid(mb) then
+                pcall(function() require('vivify').reload(mb) end) -- preview に cache-bust 反映
+            end
+        end,
+        desc = 'figure(inline): :w で SVG 再生成 + preview reload',
+    })
+    vim.notify('図ソース編集: ' .. vim.fn.fnamemodify(svg, ':t') .. '（:w で再生成＋preview反映）',
+        vim.log.levels.INFO)
+end
+
 function M.setup()
+    -- :FigEdit — カーソル行の ![](*.svg) の埋め込みソースを編集用バッファで開く（studio 不使用）。
+    vim.api.nvim_create_user_command('FigEdit', function()
+        local md_buf = vim.api.nvim_get_current_buf()
+        local line = vim.api.nvim_get_current_line()
+        local rel = line:match('%]%(([^)?#]-%.svg)') -- ?v= 等のクエリ付きも拾う
+        if not rel then
+            vim.notify('カーソル行に ![](*.svg) が見つかりません', vim.log.levels.WARN)
+            return
+        end
+        M.edit_source(resolve(rel), md_buf)
+    end, { desc = '埋め込みSVGの Python ソースを編集（:w で再生成＋preview反映）' })
+
     vim.api.nvim_create_user_command('Studio', function(o)
         local kind, fmt
         for _, a in ipairs(o.fargs) do
