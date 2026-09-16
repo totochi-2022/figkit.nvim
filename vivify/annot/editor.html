@@ -36,7 +36,16 @@
   #pct { opacity: .7; }
   #sizebox .lbl { opacity: .7; }
   #view { opacity: .55; border-left: 1px solid #8884; padding-left: .45rem; }
-  #fit { font: inherit; font-size: 11px; padding: 0 .3rem; cursor: pointer; }
+  #fit { font: inherit; font-size: 11px; padding: 0 .35rem; cursor: pointer; }
+  /* 仕上がりプレビュー: 実際に保存される PNG をそのまま原寸で出す（編集画面には触らない） */
+  #preview {
+    position: fixed; inset: 0; z-index: 100; background: #000000cc;
+    display: flex; align-items: center; justify-content: center; cursor: zoom-out;
+  }
+  #preview[hidden] { display: none; }
+  #previewInner { max-width: 96vw; max-height: 94vh; overflow: auto; text-align: center; }
+  #previewImg { display: block; margin: 0 auto; background: #fff; box-shadow: 0 2px 16px #0008; }
+  #previewNote { margin-top: .5rem; color: #eee; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -48,7 +57,7 @@
     <option value="14" selected>ふつう</option>
     <option value="26">粗い</option>
   </select>
-  <span id="note">保存サイズは右下の「書き出し」欄。 − / + は表示だけで保存サイズは変わりません</span>
+  <span id="note">保存サイズは右下の「書き出し」欄。 − / + は表示だけ。「仕上がり」で実物を確認</span>
   <span id="msg"></span>
 </div>
 <div id="host"></div>
@@ -57,8 +66,15 @@
   <input id="w" type="number" min="16" step="10" title="保存される画像の幅[px]。空にすると原寸">
   <span id="rest">×  ―</span>
   <span id="pct">―</span>
-  <button id="fit" type="button" title="表示を書き出しサイズに合わせて確認する">⇄</button>
+  <button id="fit" type="button" title="実際に保存される PNG を生成して原寸で表示します">仕上がり</button>
   <span id="view">表示 100%</span>
+</div>
+
+<div id="preview" hidden>
+  <div id="previewInner">
+    <img id="previewImg" alt="">
+    <div id="previewNote"></div>
+  </div>
 </div>
 
 <!-- markerjs3(グローバル markerjs3) → markerjs-ui(グローバル markerjsUI) の順で読む -->
@@ -249,22 +265,38 @@
       viewEl.textContent = '表示 ' + Math.round((ma.zoomLevel || 1) * 100) + '%';
     }
 
-    // 表示を書き出しサイズに合わせる（仕上がりの確認用）。
-    function fitViewToExport() {
-      ma.zoomLevel = exportW / img.naturalWidth;
-      if (ma.applyTransform) ma.applyTransform();   // 代入だけでは再描画されない
-      updateView();
-    }
-
     function applyWidth() {
       var v = parseInt(wIn.value, 10);
       exportW = (!v || v <= 0) ? img.naturalWidth : v;
-      updateExport();
-      fitViewToExport();   // 打ち込んだ直後は仕上がりを見せる（その後 + で戻して編集できる）
+      updateExport();   // 表示倍率には触らない（編集中の見え方を勝手に変えない）
     }
     wIn.addEventListener('change', applyWidth);
     wIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') applyWidth(); });
-    fitBtn.addEventListener('click', fitViewToExport);
+
+    // 仕上がり確認。ズームで縮小して見せる方式は**嘘になる**ので採らない:
+    // 注釈サイズの補正は書き出し時の state 側だけに掛けており、編集中のマーカーには
+    // 効かないため、縮小表示すると注釈だけ出力より小さく見えてしまう。
+    // ここでは保存と同じ経路で実際に PNG を焼いて、それを原寸で出す。
+    var preview     = document.getElementById('preview');
+    var previewImg  = document.getElementById('previewImg');
+    var previewNote = document.getElementById('previewNote');
+
+    fitBtn.addEventListener('click', function () {
+      say('仕上がりを生成中…');
+      rasterize(ma.getState()).then(function (dataUrl) {
+        previewImg.src = dataUrl;
+        var rs = editor.settings.rendererSettings;
+        previewNote.textContent = (rs.naturalSize ? img.naturalWidth + ' × ' + img.naturalHeight
+                                                  : rs.width + ' × ' + rs.height)
+          + ' px — 保存されるのはこの画像です（クリックか Esc で閉じる）';
+        preview.hidden = false;
+        say('');
+      }).catch(function (e) { say('仕上がり生成に失敗: ' + e.message, true); });
+    });
+    preview.addEventListener('click', function () { preview.hidden = true; });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') preview.hidden = true;
+    });
 
     // ズームボタン/ホイールは**表示だけ**を変える（書き出し幅には触らない）。
     function onZoomed() { setTimeout(updateView, 0); }
