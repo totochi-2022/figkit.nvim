@@ -18,6 +18,12 @@ import tempfile
 import textwrap
 import unicodedata
 
+# 図の既定フォントサイズ。schemdraw の既定 14 は CJK ラベルだと大きすぎ、端の見切れも招く
+# (_pad_svg_for_cjk で救ってはいるが、そもそも小さいほうが収まりが良い)。
+# exec の前に global config を張るので、既存の図も再生成すれば自動で揃う。
+# ソース側で Drawing(fontsize=...) と書けば従来どおり個別に上書きできる。
+DEFAULT_FONTSIZE = 10
+
 _META_RE = re.compile(
     r'<metadata id="diagram-source"[^>]*><!\[CDATA\[(.*?)\]\]></metadata>', re.S
 )
@@ -132,6 +138,15 @@ def render_file(source, target):
     os.close(fd)
     try:
         ns = {"out": out}
+        # 既定フォントサイズを図全体に効かせる。config() は他の項目も既定値に戻すが、
+        # レンダラは1図1プロセスなので誰も設定していない=実害なし。ユーザーのソースが
+        # 後から schemdraw.config(...) を呼べばそちらが勝つ。
+        try:
+            import schemdraw
+        except ImportError:
+            pass  # matplotlib / rdkit 等、schemdraw を使わない図もある
+        else:
+            schemdraw.config(fontsize=DEFAULT_FONTSIZE)
         try:
             exec(source, ns)  # noqa: S102  (ローカル専用・信頼入力前提)
         except Exception as e:  # noqa: BLE001
