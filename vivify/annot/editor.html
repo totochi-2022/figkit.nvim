@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>annot</title>
+<style>
+  :root { color-scheme: light dark; }
+  html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; background: #f6f6f6; }
+  @media (prefers-color-scheme: dark) { body { background: #1e1e1e; color: #ddd; } }
+  #bar {
+    flex: 0 0 auto; display: flex; gap: .75rem; align-items: center;
+    padding: .35rem .6rem; font-size: 12px; border-bottom: 1px solid #8884;
+  }
+  #name { font-weight: 600; }
+  #msg { margin-left: auto; opacity: .85; }
+  #msg.err { color: #e06c75; opacity: 1; }
+  #host { flex: 1 1 auto; min-height: 0; }
+  mjsui-annotation-editor { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span id="name">…</span>
+  <span id="hint">ツールバーの保存で <code>.ann.png</code> + <code>.ann.json</code> を書き出し</span>
+  <span id="msg"></span>
+</div>
+<div id="host"></div>
+
+<!-- markerjs3(グローバル markerjs3) → markerjs-ui(グローバル markerjsUI) の順で読む -->
+<script src="vendor/markerjs3.umd.js"></script>
+<script src="vendor/markerjs-ui.umd.js"></script>
+<script>
+(function () {
+  'use strict';
+  var q    = new URLSearchParams(location.search);
+  var orig = q.get('f') || '';    // 原本の絶対パス（サーバが読み書きの基準にする）
+  var sock = q.get('sock') || ''; // 呼び出し元 nvim の v:servername（保存通知先）
+  var buf  = q.get('buf') || '';  // リンク元 md のバッファ番号
+
+  var nameEl = document.getElementById('name');
+  var msgEl  = document.getElementById('msg');
+  nameEl.textContent = orig.split('/').pop() || '(no file)';
+  document.title = 'annot: ' + nameEl.textContent;
+
+  function say(text, isError) {
+    msgEl.textContent = text;
+    msgEl.className = isError ? 'err' : '';
+  }
+
+  if (!orig) { return say('?f= に画像パスが必要です', true); }
+
+  // 画像は同一オリジン(/img)から配信される。外部URLを直接読むと canvas が汚染されて
+  // ラスタ書き出し(toDataURL)が落ちるため、必ずサーバ経由にする。
+  var img = new Image();
+  img.src = '/img?p=' + encodeURIComponent(orig);
+
+  Promise.all([
+    new Promise(function (resolve, reject) {
+      img.onload = resolve;
+      img.onerror = function () { reject(new Error('画像を読めません: ' + orig)); };
+    }),
+    fetch('/state?p=' + encodeURIComponent(orig)).then(function (r) { return r.json(); }),
+  ]).then(function (res) {
+    var saved = res[1] && res[1].state;
+
+    var editor = new markerjsUI.AnnotationEditor();
+    editor.targetImage = img;
+    editor.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.getElementById('host').appendChild(editor);
+
+    // 合成 png は原寸で出す（プレビュー幅でリサイズされた画をファイルにしない）。
+    editor.settings.renderOnSave = true;
+    editor.settings.rendererSettings.naturalSize = true;
+    editor.settings.rendererSettings.imageType = 'image/png';
+
+    if (saved) {
+      try { editor.restoreState(saved); say('前回の注釈を復元'); }
+      catch (e) { say('state の復元に失敗: ' + e.message, true); }
+    }
+
+    editor.addEventListener('editorsave', function (ev) {
+      say('保存中…');
+      fetch('/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orig: orig, sock: sock, buf: buf,
+          state: ev.detail.state,
+          dataUrl: ev.detail.dataUrl,
+        }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (r) {
+          if (r.ok) { say('保存: ' + r.ann.split('/').pop()); }
+          else { say('保存失敗: ' + (r.error || '?'), true); }
+        })
+        .catch(function (e) { say('保存失敗: ' + e.message, true); });
+    });
+
+    editor.addEventListener('editorclose', function () {
+      say('閉じる（ペインは ss→p で閉じられます）');
+    });
+  }).catch(function (e) {
+    say(e.message, true);
+  });
+})();
+</script>
+</body>
+</html>
