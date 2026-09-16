@@ -188,6 +188,25 @@
     // ShapeOutlineMarkerEditor をそのまま使う。
     ma.registerMarkerType(MosaicMarker, markerjs3.ShapeOutlineMarkerEditor);
 
+    // 縮小中に作ったマーカーのサイズ補正。
+    // 文字サイズ・線幅は「画像の座標系」で持つので、50% 表示のときに既定値のまま作ると
+    // 画面でも書き出しでも半分の大きさになってしまう（縮小するほど字が小さくなる）。
+    // 作成時に倍率の逆数を掛けておくと、画面で見えている通りの大きさで焼ける。
+    ma.addEventListener('markercreate', function (ev) {
+      var z = Math.min(1, ma.zoomLevel || 1);
+      if (z >= 1) return;
+      var m = ev.detail && ev.detail.markerEditor && ev.detail.markerEditor.marker;
+      if (!m) return;
+      var k = 1 / z;
+      if (m.fontSize && typeof m.fontSize.value === 'number') {
+        m.fontSize = { value: Math.round(m.fontSize.value * k * 100) / 100,
+                       units: m.fontSize.units, step: m.fontSize.step };
+      }
+      if (typeof m.strokeWidth === 'number' && m.strokeWidth > 0) {
+        m.strokeWidth = Math.max(1, Math.round(m.strokeWidth * k));
+      }
+    });
+
     mosaicBtn.addEventListener('click', function () {
       ma.createMarker(MosaicMarker);  // 以後、画像上をドラッグすると矩形が引ける
       mosaicBtn.classList.add('on');
@@ -254,6 +273,7 @@
 
     // state から PNG を焼く。サイズは右下パネルの設定をそのまま使う。
     function rasterize(state) {
+      syncExportSize();   // ピンチ等でボタンを経由せず倍率が変わっていても取りこぼさない
       var rs = editor.settings.rendererSettings;
       var r = new markerjs3.Renderer();
       r.targetImage = img;
