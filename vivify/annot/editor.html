@@ -192,21 +192,6 @@
     // 文字サイズ・線幅は「画像の座標系」で持つので、50% 表示のときに既定値のまま作ると
     // 画面でも書き出しでも半分の大きさになってしまう（縮小するほど字が小さくなる）。
     // 作成時に倍率の逆数を掛けておくと、画面で見えている通りの大きさで焼ける。
-    ma.addEventListener('markercreate', function (ev) {
-      var z = Math.min(1, ma.zoomLevel || 1);
-      if (z >= 1) return;
-      var m = ev.detail && ev.detail.markerEditor && ev.detail.markerEditor.marker;
-      if (!m) return;
-      var k = 1 / z;
-      if (m.fontSize && typeof m.fontSize.value === 'number') {
-        m.fontSize = { value: Math.round(m.fontSize.value * k * 100) / 100,
-                       units: m.fontSize.units, step: m.fontSize.step };
-      }
-      if (typeof m.strokeWidth === 'number' && m.strokeWidth > 0) {
-        m.strokeWidth = Math.max(1, Math.round(m.strokeWidth * k));
-      }
-    });
-
     mosaicBtn.addEventListener('click', function () {
       ma.createMarker(MosaicMarker);  // 以後、画像上をドラッグすると矩形が引ける
       mosaicBtn.classList.add('on');
@@ -272,6 +257,28 @@
     }
 
     // state から PNG を焼く。サイズは右下パネルの設定をそのまま使う。
+    // 縮小して書き出すとき、注釈の文字と線まで一緒に縮むと読めなくなる
+    //（「書いたあとに縮小したら字が小さくなる」）。書き出しは画像を z 倍に縮めるので、
+    // state 側で文字サイズと線幅を 1/z 倍しておくと、出力での絶対サイズが原寸のときと揃う。
+    //
+    // なぜ編集中のマーカーを直接いじらないか: marker.js UI は**新しいマーカーを作るたびに
+    // 既存マーカーのスタイルを既定値へ書き戻す**ため、ライブに書いた補正は2個目を足した
+    // 時点で消える。state は書き出し直前のコピーなので誰にも上書きされない。
+    function compensateState(state, z) {
+      if (!(z > 0) || z >= 1) return state;
+      var k = 1 / z;
+      var st = JSON.parse(JSON.stringify(state));
+      (st.markers || []).forEach(function (m) {
+        if (m.fontSize && typeof m.fontSize.value === 'number') {
+          m.fontSize = { value: m.fontSize.value * k, units: m.fontSize.units, step: m.fontSize.step };
+        }
+        if (typeof m.strokeWidth === 'number' && m.strokeWidth > 0) {
+          m.strokeWidth = m.strokeWidth * k;
+        }
+      });
+      return st;
+    }
+
     function rasterize(state) {
       syncExportSize();   // ピンチ等でボタンを経由せず倍率が変わっていても取りこぼさない
       var rs = editor.settings.rendererSettings;
@@ -280,8 +287,9 @@
       r.registerMarkerType(MosaicMarker);
       r.naturalSize = rs.naturalSize;
       r.imageType = rs.imageType;
-      if (!rs.naturalSize) { r.width = rs.width; r.height = rs.height; }
-      return r.rasterize(state);
+      var z = 1;
+      if (!rs.naturalSize) { r.width = rs.width; r.height = rs.height; z = rs.width / img.naturalWidth; }
+      return r.rasterize(compensateState(state, z));
     }
 
     editor.addEventListener('editorsave', function (ev) {
