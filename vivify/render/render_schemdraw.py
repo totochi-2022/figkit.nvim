@@ -16,10 +16,95 @@ import shutil
 import sys
 import tempfile
 import textwrap
+import unicodedata
 
 _META_RE = re.compile(
     r'<metadata id="diagram-source"[^>]*><!\[CDATA\[(.*?)\]\]></metadata>', re.S
 )
+
+
+def _char_w(c):
+    """1文字の概算幅(em単位)。schemdraw は半角基準で見積るため全角(CJK)で不足する。
+    ここでは全角=1.0em・太い英大文字=0.92・英大文字=0.72・細い記号=0.34・他=0.6 と多めに見積る。"""
+    eaw = unicodedata.east_asian_width(c)
+    if eaw in ("W", "F"):
+        return 1.0
+    if eaw == "A":  # 全角約物(：等)は実運用で全角幅になりがち
+        return 0.95
+    if c in "WM@%":
+        return 0.92
+    if c.isupper():
+        return 0.72
+    if c in "il|.,':;!()[]{}　 ":
+        return 0.34
+    return 0.60
+
+
+def _text_w(s, fs):
+    return sum(_char_w(c) for c in s) * fs
+
+
+def _pad_svg_for_cjk(svg):
+    """<text>/<tspan> の実描画範囲(CJK考慮)を計算し、はみ出す分だけ viewBox を広げる。
+    schemdraw の CJK 幅過小評価による端ラベルの見切れを防ぐ。失敗時は無変換で返す。"""
+    try:
+        m = re.search(r"<svg\b[^>]*>", svg)
+        if not m:
+            return svg
+        tag = m.group(0)
+        vb = re.search(r'viewBox="([-\d.eE]+)\s+([-\d.eE]+)\s+([-\d.eE]+)\s+([-\d.eE]+)"', tag)
+        wpt = re.search(r'width="([\d.eE]+)pt"', tag)
+        hpt = re.search(r'height="([\d.eE]+)pt"', tag)
+        if not vb:
+            return svg
+        vx, vy, vw, vh = (float(vb.group(i)) for i in range(1, 5))
+        minx, miny, maxx, maxy = vx, vy, vx + vw, vy + vh
+
+        def _attr(pat, s, default):
+            mm = re.search(pat, s)
+            return mm.group(1) if mm else default
+
+        for tm in re.finditer(r"<text\b([^>]*)>(.*?)</text>", svg, re.S):
+            attrs, body = tm.group(1), tm.group(2)
+            fs = float(_attr(r'font-size="([\d.eE]+)"', attrs, "12"))
+            anch = _attr(r'text-anchor="(\w+)"', attrs, "start")
+            ty = float(_attr(r'y="([-\d.eE]+)"', attrs, str(miny)))
+            tx = float(_attr(r'x="([-\d.eE]+)"', attrs, "0"))
+            yline = ty
+            for sp in re.finditer(r"<tspan\b([^>]*)>([^<]*)</tspan>", body):
+                spa, txt = sp.group(1), sp.group(2)
+                if not txt:
+                    continue
+                x0 = float(_attr(r'x="([-\d.eE]+)"', spa, str(tx)))
+                dym = re.search(r'dy="([-\d.eE]+)"', spa)
+                yline = yline + float(dym.group(1)) if dym else yline
+                w = _text_w(txt, fs)
+                if anch == "middle":
+                    lo, hi = x0 - w / 2, x0 + w / 2
+                elif anch == "end":
+                    lo, hi = x0 - w, x0
+                else:
+                    lo, hi = x0, x0 + w
+                minx, maxx = min(minx, lo), max(maxx, hi)
+                miny, maxy = min(miny, yline - fs), max(maxy, yline + 0.3 * fs)
+
+        pad = 2.0
+        minx, miny, maxx, maxy = minx - pad, miny - pad, maxx + pad, maxy + pad
+        nw, nh = maxx - minx, maxy - miny
+        if nw <= 0 or nh <= 0:
+            return svg
+        newtag = re.sub(
+            r'viewBox="[^"]*"', f'viewBox="{minx:.2f} {miny:.2f} {nw:.2f} {nh:.2f}"', tag
+        )
+        if wpt and vw > 0:
+            ppu = float(wpt.group(1)) / vw  # pt/unit を維持して拡大
+            newtag = re.sub(r'width="[\d.eE]+pt"', f'width="{nw * ppu:.4f}pt"', newtag)
+        if hpt and vh > 0:
+            ppu = float(hpt.group(1)) / vh
+            newtag = re.sub(r'height="[\d.eE]+pt"', f'height="{nh * ppu:.4f}pt"', newtag)
+        return svg[: m.start()] + newtag + svg[m.end():]
+    except Exception:  # noqa: BLE001  (後処理失敗で描画を壊さない)
+        return svg
 
 
 def _brief(e):
@@ -56,6 +141,7 @@ def render_file(source, target):
 
         if ext in ("", ".svg"):
             svg = open(out, encoding="utf-8", errors="replace").read()
+            svg = _pad_svg_for_cjk(svg)  # CJK 幅過小評価による端ラベル見切れを補正
             j = svg.find("<svg")  # 先頭 <?xml?>/<!DOCTYPE> を飛ばして <svg> 本体を探す
             if j == -1:
                 return "SVG ではありません（out に SVG を書いてください）"
