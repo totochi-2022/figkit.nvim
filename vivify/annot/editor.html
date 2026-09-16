@@ -21,7 +21,8 @@
   #msg.err { color: #e06c75; opacity: 1; }
   #host { flex: 1 1 auto; min-height: 0; }
   mjsui-annotation-editor { display: block; width: 100%; height: 100%; }
-  /* 書き出しサイズの表示＋指定。エディタ右下のズームボタンのすぐ上に重ねる */
+
+  /* 作業サイズのパネル。エディタ右下のズームボタンのすぐ上に重ねる */
   #sizebox {
     position: fixed; right: 14px; bottom: 54px; z-index: 10;
     display: flex; align-items: center; gap: .3rem;
@@ -32,12 +33,13 @@
   @media (prefers-color-scheme: dark) {
     #sizebox { background: #2b2b2bf2; border-color: #aaa5; color: #ddd; }
   }
+  #sizebox .lbl { opacity: .7; }
   #w { width: 4.2rem; font: inherit; text-align: right; padding: .1rem .2rem; }
   #pct { opacity: .7; }
-  #sizebox .lbl { opacity: .7; }
+  #apply, #fit { font: inherit; font-size: 11px; padding: 0 .35rem; cursor: pointer; }
   #view { opacity: .55; border-left: 1px solid #8884; padding-left: .45rem; }
-  #fit { font: inherit; font-size: 11px; padding: 0 .35rem; cursor: pointer; }
-  /* 仕上がりプレビュー: 実際に保存される PNG をそのまま原寸で出す（編集画面には触らない） */
+
+  /* 仕上がりプレビュー: 実際に保存される PNG をそのまま原寸で出す */
   #preview {
     position: fixed; inset: 0; z-index: 100; background: #000000cc;
     display: flex; align-items: center; justify-content: center; cursor: zoom-out;
@@ -57,15 +59,17 @@
     <option value="14" selected>ふつう</option>
     <option value="26">粗い</option>
   </select>
-  <span id="note">保存サイズは右下の「書き出し」欄。 − / + は表示だけ。「仕上がり」で実物を確認</span>
+  <span id="note">まず右下で作業サイズを決める → あとは原寸で描く（見たままが保存されます）</span>
   <span id="msg"></span>
 </div>
 <div id="host"></div>
+
 <div id="sizebox">
-  <span class="lbl">書き出し</span>
-  <input id="w" type="number" min="16" step="10" title="保存される画像の幅[px]。空にすると原寸">
+  <span class="lbl">作業サイズ</span>
+  <input id="w" type="number" min="16" step="10" title="この大きさの画像に注釈を描きます（= 保存される大きさ）">
   <span id="rest">×  ―</span>
   <span id="pct">―</span>
+  <button id="apply" type="button" title="この大きさで作り直します（描いた注釈は同じ比率で追従します）">適用</button>
   <button id="fit" type="button" title="実際に保存される PNG を生成して原寸で表示します">仕上がり</button>
   <span id="view">表示 100%</span>
 </div>
@@ -81,6 +85,20 @@
 <script src="vendor/markerjs3.umd.js"></script>
 <script src="vendor/markerjs-ui.umd.js"></script>
 <script>
+/* 設計の要点 ───────────────────────────────────────────────────────────
+ * 「作業サイズ = 出力サイズ」にして、**常に原寸(1:1)で描く**。
+ * こうすると編集画面がそのまま仕上がりになり、位置も文字の大きさも見たままになる。
+ * ズームは純粋な虫眼鏡（全部が同じ比率で拡大されるので何も歪まない）。
+ *
+ * 以前は原寸の画像に描いて書き出し時だけ縮めていたが、
+ *   - 注釈まで一緒に縮んで読めなくなる → state 側で補正 → 編集画面と出力が食い違う
+ *   - 縮小表示のまま作業すると字が打ちにくい / 位置も仕上がりの大きさも分からない
+ * と問題が連鎖したのでやめた。
+ *
+ * サイズを変えると **エディタごと作り直す**。既存の注釈は marker.js が state を
+ * 自動で比率調整してくれるので失われない(900→360 で座標も線幅もちょうど 0.4 倍)。
+ * 縮小は毎回**原本から**作るので、サイズを往復しても劣化しない。
+ * ─────────────────────────────────────────────────────────────────── */
 (function () {
   'use strict';
   var q    = new URLSearchParams(location.search);
@@ -88,10 +106,21 @@
   var sock = q.get('sock') || ''; // 呼び出し元 nvim の v:servername（保存通知先）
   var buf  = q.get('buf') || '';  // リンク元 md のバッファ番号
 
-  var nameEl   = document.getElementById('name');
-  var grainSel = document.getElementById('grain');
+  var nameEl    = document.getElementById('name');
+  var msgEl     = document.getElementById('msg');
+  var grainSel  = document.getElementById('grain');
   var mosaicBtn = document.getElementById('mosaic');
-  var msgEl  = document.getElementById('msg');
+  var wIn       = document.getElementById('w');
+  var restEl    = document.getElementById('rest');
+  var pctEl     = document.getElementById('pct');
+  var applyBtn  = document.getElementById('apply');
+  var fitBtn    = document.getElementById('fit');
+  var viewEl    = document.getElementById('view');
+  var host      = document.getElementById('host');
+  var preview   = document.getElementById('preview');
+  var previewImg  = document.getElementById('previewImg');
+  var previewNote = document.getElementById('previewNote');
+
   nameEl.textContent = orig.split('/').pop() || '(no file)';
   document.title = 'annot: ' + nameEl.textContent;
 
@@ -99,17 +128,42 @@
     msgEl.textContent = text;
     msgEl.className = isError ? 'err' : '';
   }
-
   if (!orig) { return say('?f= に画像パスが必要です', true); }
+
+  // いまエディタに載せているもの
+  var original = null;   // 原本(原寸)。縮小は常にここから作る＝往復しても劣化しない
+  var current  = null;   // 作業サイズの画像
+  var editor   = null;
+  var ma       = null;
+  var MosaicMarker = null;
+  var mosaicUrl = '';
 
   // 画像は同一オリジン(/img)から配信される。外部URLを直接読むと canvas が汚染されて
   // ラスタ書き出し(toDataURL)が落ちるため、必ずサーバ経由にする。
-  var img = new Image();
-  img.src = '/img?p=' + encodeURIComponent(orig);
+  function loadImage(src) {
+    return new Promise(function (resolve, reject) {
+      var im = new Image();
+      im.onload = function () { resolve(im); };
+      im.onerror = function () { reject(new Error('画像を読めません: ' + src)); };
+      im.src = src;
+    });
+  }
 
-  // 画像全体を一度だけモザイク化した data URL を作る。
-  // 各モザイクマーカーはこれを「原本と同じ座標」に置いてクリップするだけなので、
-  // 矩形を動かしても常にその真下の領域が出る（切り出しを貼る方式だと古い絵が付いてくる）。
+  function scaledImage(src, w) {
+    if (w >= src.naturalWidth) return Promise.resolve(src);
+    var c = document.createElement('canvas');
+    c.width = w;
+    c.height = Math.max(1, Math.round(src.naturalHeight * w / src.naturalWidth));
+    var ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, 0, 0, c.width, c.height);
+    return loadImage(c.toDataURL('image/png'));
+  }
+
+  // 画像全体を一度だけモザイク化した data URL。各モザイクマーカーはこれを
+  // 「元画像と同じ座標」に置いて矩形でクリップするだけなので、矩形を動かしても
+  // 常にその真下の領域が出る（切り出しを貼る方式だと古い絵が付いてくる）。
   function makeMosaicUrl(image, block) {
     var w = image.naturalWidth, h = image.naturalHeight;
     var sw = Math.max(1, Math.round(w / block)), sh = Math.max(1, Math.round(h / block));
@@ -119,36 +173,24 @@
     var big = document.createElement('canvas');
     big.width = w; big.height = h;
     var c = big.getContext('2d');
-    c.imageSmoothingEnabled = false;                          // 補間なしで戻す = ブロック状になる
+    c.imageSmoothingEnabled = false;                          // 補間なしで戻す = ブロック状
     c.drawImage(small, 0, 0, sw, sh, 0, 0, w, h);
     return big.toDataURL('image/png');
   }
 
-  Promise.all([
-    new Promise(function (resolve, reject) {
-      img.onload = resolve;
-      img.onerror = function () { reject(new Error('画像を読めません: ' + orig)); };
-    }),
-    fetch('/state?p=' + encodeURIComponent(orig)).then(function (r) { return r.json(); }),
-  ]).then(function (res) {
-    var saved = res[1] && res[1].state;
-
-    // --- 自作マーカー: モザイク -------------------------------------------------
-    // 原本と同じ大きさのモザイク画像を、マーカーの矩形でクリップして見せる。
-    // 中身の座標は -left/-top にずらすので、動かしてもリサイズしても真下の領域が出る。
-    var mosaicUrl = makeMosaicUrl(img, parseInt(grainSel.value, 10));
-    var mosaicSeq = 0;
+  // 自作マーカー(モザイク)。対象画像ごとに作る必要があるので関数で包む。
+  function makeMosaicType(image) {
     var NS = 'http://www.w3.org/2000/svg';
-
-    class MosaicMarker extends markerjs3.ShapeOutlineMarkerBase {
+    var seq = 0;
+    return class MosaicMarkerImpl extends markerjs3.ShapeOutlineMarkerBase {
       static typeName = 'MosaicMarker';
       static title = 'Mosaic';
-      static applyDefaultFilter = false; // 影が付くと潰した感じが濁るので切る
+      static applyDefaultFilter = false;   // 影が付くと潰した感じが濁るので切る
 
       constructor(container) {
         super(container);
         this.strokeWidth = 0;
-        this._clipId = 'mosaic-clip-' + (++mosaicSeq);
+        this._clipId = 'mosaic-clip-' + (++seq);
       }
 
       createVisual() {
@@ -159,8 +201,8 @@
         clip.appendChild(this._clipRect);
         this._image = document.createElementNS(NS, 'image');
         this._image.setAttribute('href', mosaicUrl);
-        this._image.setAttribute('width', img.naturalWidth);
-        this._image.setAttribute('height', img.naturalHeight);
+        this._image.setAttribute('width', image.naturalWidth);
+        this._image.setAttribute('height', image.naturalHeight);
         this._image.setAttribute('preserveAspectRatio', 'none');
         this._image.setAttribute('clip-path', 'url(#' + this._clipId + ')');
         this._image.dataset.mosaic = '1';   // 粗さ変更時に href を貼り替える目印
@@ -185,171 +227,73 @@
       setSize() { super.setSize(); this.adjustMosaic(); }
       moveVisual(point) { super.moveVisual(point); this.adjustMosaic(); }
       ownsTarget(el) { return super.ownsTarget(el) || el === this._image; }
-    }
-    // ---------------------------------------------------------------------------
+    };
+  }
 
-    var editor = new markerjsUI.AnnotationEditor();
-    editor.targetImage = img;
+  function updatePanel() {
+    wIn.value = current.naturalWidth;
+    restEl.textContent = '× ' + current.naturalHeight + ' px';
+    pctEl.textContent = Math.round(current.naturalWidth / original.naturalWidth * 100) + '%';
+  }
+  function updateView() {
+    viewEl.textContent = '表示 ' + Math.round((ma && ma.zoomLevel || 1) * 100) + '%';
+  }
+
+  // エディタを作り直して state を載せ直す。
+  // state の座標系(state.width)と対象画像の大きさが違うとき、marker.js が自動で
+  // 比率調整してくれる＝サイズを変えても描いた注釈は失われない。
+  function mount(image, state) {
+    current = image;
+    mosaicUrl = makeMosaicUrl(image, parseInt(grainSel.value, 10));
+    MosaicMarker = makeMosaicType(image);
+
+    host.innerHTML = '';
+    editor = new markerjsUI.AnnotationEditor();
+    editor.targetImage = image;
     editor.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    document.getElementById('host').appendChild(editor);
+    host.appendChild(editor);
 
-    // 内蔵のレンダラは自作マーカー型を知らない＝モザイクが焼かれない。
-    // そこで書き出しは自前の Renderer で行う（registerMarkerType で型を教えられる）。
-    editor.settings.renderOnSave = false;
-    editor.settings.rendererSettings.imageType = 'image/png';
-    // 読み込み直後を必ず 100% にする。自動ズームが効くと「見たまま」が
-    // ペイン幅次第で変わってしまい、書き出しサイズが予測できなくなる。
-    editor.settings.autoZoomIn = false;
-    editor.settings.autoZoomOut = false;
-
-    // 書き出しサイズ = 編集画面の表示倍率（右下の − / ⊡ / + で変えた値）。
-    // 見たままが保存される。拡大方向には焼かない（水増ししてもボケるだけなので 100% で頭打ち）。
-    var ma   = editor.markerArea;
-
-    // 自作型を編集側に登録。矩形をドラッグして作る型なので編集UIは既製の
-    // ShapeOutlineMarkerEditor をそのまま使う。
+    ma = editor.markerArea;
     ma.registerMarkerType(MosaicMarker, markerjs3.ShapeOutlineMarkerEditor);
 
-    // 縮小中に作ったマーカーのサイズ補正。
-    // 文字サイズ・線幅は「画像の座標系」で持つので、50% 表示のときに既定値のまま作ると
-    // 画面でも書き出しでも半分の大きさになってしまう（縮小するほど字が小さくなる）。
-    // 作成時に倍率の逆数を掛けておくと、画面で見えている通りの大きさで焼ける。
-    mosaicBtn.addEventListener('click', function () {
-      ma.createMarker(MosaicMarker);  // 以後、画像上をドラッグすると矩形が引ける
-      mosaicBtn.classList.add('on');
-    });
-    // 他のツールを選んだら押下表示を戻す
+    // 1:1 で描くので書き出しは常に原寸。補正は要らない。
+    editor.settings.renderOnSave = false;          // 自作マーカーを焼くため自前でラスタライズ
+    editor.settings.rendererSettings.naturalSize = true;
+    editor.settings.rendererSettings.imageType = 'image/png';
+    editor.settings.autoZoomOut = true;            // 大きい画像は全体が見えるように収める
+    editor.settings.autoZoomIn = false;            // 小さい画像を無理に拡大はしない
+
+    if (state) {
+      try { editor.restoreState(state); }
+      catch (e) { say('注釈の復元に失敗: ' + e.message, true); }
+    }
+
     editor.shadowRoot.addEventListener('click', function () {
-      setTimeout(function () { mosaicBtn.classList.remove('on'); }, 0);
+      setTimeout(function () { updateView(); mosaicBtn.classList.remove('on'); }, 0);
     }, true);
+    editor.shadowRoot.addEventListener('wheel', function () { setTimeout(updateView, 0); }, true);
 
-    // 粗さ変更: モザイク画像を作り直し、既存マーカーの href を貼り替える
-    grainSel.addEventListener('change', function () {
-      mosaicUrl = makeMosaicUrl(img, parseInt(grainSel.value, 10));
-      ma.shadowRoot.querySelectorAll('image[data-mosaic]').forEach(function (el) {
-        el.setAttribute('href', mosaicUrl);
-      });
-    });
+    editor.addEventListener('editorsave', onSave);
 
-    var wIn    = document.getElementById('w');
-    var rest   = document.getElementById('rest');
-    var pct    = document.getElementById('pct');
-    var viewEl = document.getElementById('view');
-    var fitBtn = document.getElementById('fit');
+    updatePanel();
+    setTimeout(updateView, 300);   // autoZoom の結果が入るのを待つ
+  }
 
-    // 表示倍率 → 書き出しサイズ。拡大方向には焼かない(水増ししてもボケるだけ)ので 100% で頭打ち。
-    // 書き出し幅は**表示倍率と独立**に持つ。
-    // 以前は「表示倍率＝書き出しサイズ」にしていたが、小さく出したいときに縮小表示のまま
-    // 作業することになり、文字が打ちにくかった。分けておけば、表示は 100% に戻して普通に
-    // 編集しつつ、保存されるのは指定した幅、という使い方ができる。
-    var exportW = img.naturalWidth;
+  // 保存と同じ経路で PNG を焼く。内蔵のラスタライズは自作マーカー型を知らない
+  // （＝画面では潰れているのに保存した PNG は素通し）ので自前の Renderer を使う。
+  function rasterize(state) {
+    var r = new markerjs3.Renderer();
+    r.targetImage = current;
+    r.registerMarkerType(MosaicMarker);
+    r.naturalSize = true;
+    r.imageType = 'image/png';
+    return r.rasterize(state);
+  }
 
-    function updateExport(keepInput) {
-      exportW = Math.max(16, Math.min(img.naturalWidth, Math.round(exportW)));
-      var z  = exportW / img.naturalWidth;
-      var h  = Math.round(img.naturalHeight * z);
-      var rs = editor.settings.rendererSettings;
-      if (z >= 1) {
-        rs.naturalSize = true;            // 原寸
-      } else {
-        rs.naturalSize = false;           // width/height は両方を設定しないと効かない
-        rs.width = exportW;
-        rs.height = h;
-      }
-      if (!keepInput) wIn.value = exportW;
-      rest.textContent = '× ' + h + ' px';
-      pct.textContent = Math.round(z * 100) + '%';
-    }
-
-    function updateView() {
-      viewEl.textContent = '表示 ' + Math.round((ma.zoomLevel || 1) * 100) + '%';
-    }
-
-    function applyWidth() {
-      var v = parseInt(wIn.value, 10);
-      exportW = (!v || v <= 0) ? img.naturalWidth : v;
-      updateExport();   // 表示倍率には触らない（編集中の見え方を勝手に変えない）
-    }
-    wIn.addEventListener('change', applyWidth);
-    wIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') applyWidth(); });
-
-    // 仕上がり確認。ズームで縮小して見せる方式は**嘘になる**ので採らない:
-    // 注釈サイズの補正は書き出し時の state 側だけに掛けており、編集中のマーカーには
-    // 効かないため、縮小表示すると注釈だけ出力より小さく見えてしまう。
-    // ここでは保存と同じ経路で実際に PNG を焼いて、それを原寸で出す。
-    var preview     = document.getElementById('preview');
-    var previewImg  = document.getElementById('previewImg');
-    var previewNote = document.getElementById('previewNote');
-
-    fitBtn.addEventListener('click', function () {
-      say('仕上がりを生成中…');
-      rasterize(ma.getState()).then(function (dataUrl) {
-        previewImg.src = dataUrl;
-        var rs = editor.settings.rendererSettings;
-        previewNote.textContent = (rs.naturalSize ? img.naturalWidth + ' × ' + img.naturalHeight
-                                                  : rs.width + ' × ' + rs.height)
-          + ' px — 保存されるのはこの画像です（クリックか Esc で閉じる）';
-        preview.hidden = false;
-        say('');
-      }).catch(function (e) { say('仕上がり生成に失敗: ' + e.message, true); });
-    });
-    preview.addEventListener('click', function () { preview.hidden = true; });
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') preview.hidden = true;
-    });
-
-    // ズームボタン/ホイールは**表示だけ**を変える（書き出し幅には触らない）。
-    function onZoomed() { setTimeout(updateView, 0); }
-    editor.shadowRoot.addEventListener('click', onZoomed, true);
-    editor.shadowRoot.addEventListener('wheel', onZoomed, true);
-    updateExport();
-    updateView();
-
-    if (saved) {
-      try { editor.restoreState(saved); say('前回の注釈を復元'); }
-      catch (e) { say('state の復元に失敗: ' + e.message, true); }
-    }
-
-    // state から PNG を焼く。サイズは右下パネルの設定をそのまま使う。
-    // 縮小して書き出すとき、注釈の文字と線まで一緒に縮むと読めなくなる
-    //（「書いたあとに縮小したら字が小さくなる」）。書き出しは画像を z 倍に縮めるので、
-    // state 側で文字サイズと線幅を 1/z 倍しておくと、出力での絶対サイズが原寸のときと揃う。
-    //
-    // なぜ編集中のマーカーを直接いじらないか: marker.js UI は**新しいマーカーを作るたびに
-    // 既存マーカーのスタイルを既定値へ書き戻す**ため、ライブに書いた補正は2個目を足した
-    // 時点で消える。state は書き出し直前のコピーなので誰にも上書きされない。
-    function compensateState(state, z) {
-      if (!(z > 0) || z >= 1) return state;
-      var k = 1 / z;
-      var st = JSON.parse(JSON.stringify(state));
-      (st.markers || []).forEach(function (m) {
-        if (m.fontSize && typeof m.fontSize.value === 'number') {
-          m.fontSize = { value: m.fontSize.value * k, units: m.fontSize.units, step: m.fontSize.step };
-        }
-        if (typeof m.strokeWidth === 'number' && m.strokeWidth > 0) {
-          m.strokeWidth = m.strokeWidth * k;
-        }
-      });
-      return st;
-    }
-
-    function rasterize(state) {
-      updateExport(true); // 入力欄の値を正として設定を確定させる
-      var rs = editor.settings.rendererSettings;
-      var r = new markerjs3.Renderer();
-      r.targetImage = img;
-      r.registerMarkerType(MosaicMarker);
-      r.naturalSize = rs.naturalSize;
-      r.imageType = rs.imageType;
-      var z = 1;
-      if (!rs.naturalSize) { r.width = rs.width; r.height = rs.height; z = rs.width / img.naturalWidth; }
-      return r.rasterize(compensateState(state, z));
-    }
-
-    editor.addEventListener('editorsave', function (ev) {
-      say('保存中…');
-      rasterize(ev.detail.state).then(function (dataUrl) {
-      fetch('/save', {
+  function onSave(ev) {
+    say('保存中…');
+    rasterize(ev.detail.state).then(function (dataUrl) {
+      return fetch('/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -357,22 +301,73 @@
           state: ev.detail.state,
           dataUrl: dataUrl,
         }),
-      })
-        .then(function (r) { return r.json(); })
-        .then(function (r) {
-          if (r.ok) { say('保存: ' + r.ann.split('/').pop()); }
-          else { say('保存失敗: ' + (r.error || '?'), true); }
-        })
-        .catch(function (e) { say('保存失敗: ' + e.message, true); });
-      }).catch(function (e) { say('書き出し失敗: ' + e.message, true); });
-    });
+      }).then(function (r) { return r.json(); });
+    }).then(function (r) {
+      if (r.ok) { say('保存: ' + r.ann.split('/').pop()); }
+      else { say('保存失敗: ' + (r.error || '?'), true); }
+    }).catch(function (e) { say('保存失敗: ' + e.message, true); });
+  }
 
-    editor.addEventListener('editorclose', function () {
-      say('閉じる（ペインは ss→p で閉じられます）');
-    });
-  }).catch(function (e) {
-    say(e.message, true);
+  // --- パネル操作 ---------------------------------------------------------
+  function applyWidth() {
+    var v = parseInt(wIn.value, 10);
+    var w = (!v || v <= 0) ? original.naturalWidth
+                           : Math.max(16, Math.min(original.naturalWidth, v));
+    if (w === current.naturalWidth) { updatePanel(); return; }
+    var state = ma.getState();          // 旧サイズ基準。mount 側で自動調整される
+    say('作り直し中…');
+    scaledImage(original, w).then(function (im) {
+      mount(im, state);
+      say('作業サイズ: ' + im.naturalWidth + ' × ' + im.naturalHeight + ' px');
+    }).catch(function (e) { say('作り直しに失敗: ' + e.message, true); });
+  }
+  applyBtn.addEventListener('click', applyWidth);
+  wIn.addEventListener('change', applyWidth);
+  wIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') applyWidth(); });
+
+  mosaicBtn.addEventListener('click', function () {
+    ma.createMarker(MosaicMarker);   // 以後、画像上をドラッグすると矩形が引ける
+    mosaicBtn.classList.add('on');
   });
+
+  grainSel.addEventListener('change', function () {
+    mosaicUrl = makeMosaicUrl(current, parseInt(grainSel.value, 10));
+    ma.shadowRoot.querySelectorAll('image[data-mosaic]').forEach(function (el) {
+      el.setAttribute('href', mosaicUrl);
+    });
+  });
+
+  fitBtn.addEventListener('click', function () {
+    say('仕上がりを生成中…');
+    rasterize(ma.getState()).then(function (dataUrl) {
+      previewImg.src = dataUrl;
+      previewNote.textContent = current.naturalWidth + ' × ' + current.naturalHeight
+        + ' px — 保存されるのはこの画像です（クリックか Esc で閉じる）';
+      preview.hidden = false;
+      say('');
+    }).catch(function (e) { say('仕上がり生成に失敗: ' + e.message, true); });
+  });
+  preview.addEventListener('click', function () { preview.hidden = true; });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') preview.hidden = true;
+  });
+
+  // --- 起動 ---------------------------------------------------------------
+  Promise.all([
+    loadImage('/img?p=' + encodeURIComponent(orig)),
+    fetch('/state?p=' + encodeURIComponent(orig)).then(function (r) { return r.json(); }),
+  ]).then(function (res) {
+    original = res[0];
+    var saved = res[1] && res[1].state;
+    // 前回の作業サイズは state.width が覚えている（marker.js の AnnotationState が
+    // キャンバスの大きさを持つため、こちらで別途保存しなくてよい）。
+    var w = (saved && saved.width) ? Math.min(saved.width, original.naturalWidth)
+                                   : original.naturalWidth;
+    return scaledImage(original, w).then(function (im) {
+      mount(im, saved);
+      if (saved) say('前回の注釈を復元');
+    });
+  }).catch(function (e) { say(e.message, true); });
 })();
 </script>
 </body>
