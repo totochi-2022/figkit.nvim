@@ -14,19 +14,38 @@
     padding: .35rem .6rem; font-size: 12px; border-bottom: 1px solid #8884;
   }
   #name { font-weight: 600; }
+  #note { opacity: .6; }
   #msg { margin-left: auto; opacity: .85; }
   #msg.err { color: #e06c75; opacity: 1; }
   #host { flex: 1 1 auto; min-height: 0; }
   mjsui-annotation-editor { display: block; width: 100%; height: 100%; }
+  /* 書き出しサイズの表示＋指定。エディタ右下のズームボタンのすぐ上に重ねる */
+  #sizebox {
+    position: fixed; right: 14px; bottom: 54px; z-index: 10;
+    display: flex; align-items: center; gap: .3rem;
+    padding: .25rem .5rem; font-size: 12px; border-radius: 6px;
+    background: #fffffff2; border: 1px solid #8886; color: #222;
+    box-shadow: 0 1px 4px #0002;
+  }
+  @media (prefers-color-scheme: dark) {
+    #sizebox { background: #2b2b2bf2; border-color: #aaa5; color: #ddd; }
+  }
+  #w { width: 4.2rem; font: inherit; text-align: right; padding: .1rem .2rem; }
+  #pct { opacity: .7; }
 </style>
 </head>
 <body>
 <div id="bar">
   <span id="name">…</span>
-  <span id="hint">ツールバーの保存で <code>.ann.png</code> + <code>.ann.json</code> を書き出し</span>
+  <span id="note">右下の − / + か、幅の直接入力で決めた大きさがそのまま保存されます</span>
   <span id="msg"></span>
 </div>
 <div id="host"></div>
+<div id="sizebox" title="書き出しサイズ。幅を入れると倍率が決まります（空にすると 100%）">
+  <input id="w" type="number" min="16" step="10">
+  <span id="rest">×  ―</span>
+  <span id="pct">―</span>
+</div>
 
 <!-- markerjs3(グローバル markerjs3) → markerjs-ui(グローバル markerjsUI) の順で読む -->
 <script src="vendor/markerjs3.umd.js"></script>
@@ -38,7 +57,6 @@
   var orig = q.get('f') || '';    // 原本の絶対パス（サーバが読み書きの基準にする）
   var sock = q.get('sock') || ''; // 呼び出し元 nvim の v:servername（保存通知先）
   var buf  = q.get('buf') || '';  // リンク元 md のバッファ番号
-  var maxw = parseInt(q.get('maxw') || '0', 10) || 0; // 書き出す .ann.png の最大幅(0=原寸)
 
   var nameEl = document.getElementById('name');
   var msgEl  = document.getElementById('msg');
@@ -71,26 +89,57 @@
     editor.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     document.getElementById('host').appendChild(editor);
 
-    // 合成 png の書き出しサイズ。
-    // 各ビューア(Vivify/GitHub/VSCode)は img に max-width:100% を掛けるので、カラム幅
-    // (Vivify 900px / GitHub 約890px)より大きく出しても表示は変わらない。表示まで小さく
-    // したいならカラム幅より小さく出す必要がある＝ここで決める。
-    // 原本と state は残るので、後から maxw を変えて焼き直せば何度でもやり直せる。
     editor.settings.renderOnSave = true;
     editor.settings.rendererSettings.imageType = 'image/png';
-    if (maxw > 0 && img.naturalWidth > maxw) {
-      // 縦横比を保って縮小。width/height は両方を設定しないと効かない。
-      editor.settings.rendererSettings.naturalSize = false;
-      editor.settings.rendererSettings.width = maxw;
-      editor.settings.rendererSettings.height =
-        Math.round(img.naturalHeight * (maxw / img.naturalWidth));
-    } else {
-      editor.settings.rendererSettings.naturalSize = true; // 元から小さい画像は拡大しない
+    // 読み込み直後を必ず 100% にする。自動ズームが効くと「見たまま」が
+    // ペイン幅次第で変わってしまい、書き出しサイズが予測できなくなる。
+    editor.settings.autoZoomIn = false;
+    editor.settings.autoZoomOut = false;
+
+    // 書き出しサイズ = 編集画面の表示倍率（右下の − / ⊡ / + で変えた値）。
+    // 見たままが保存される。拡大方向には焼かない（水増ししてもボケるだけなので 100% で頭打ち）。
+    var ma   = editor.markerArea;
+    var wIn  = document.getElementById('w');
+    var rest = document.getElementById('rest');
+    var pct  = document.getElementById('pct');
+
+    // 表示倍率 → 書き出しサイズ。拡大方向には焼かない(水増ししてもボケるだけ)ので 100% で頭打ち。
+    function syncExportSize(keepInput) {
+      var z  = Math.min(1, ma.zoomLevel || 1);
+      var w  = Math.round(img.naturalWidth * z);
+      var h  = Math.round(img.naturalHeight * z);
+      var rs = editor.settings.rendererSettings;
+      if (z >= 1) {
+        rs.naturalSize = true;            // 原寸
+      } else {
+        rs.naturalSize = false;           // width/height は両方を設定しないと効かない
+        rs.width = w;
+        rs.height = h;
+      }
+      if (!keepInput) wIn.value = w;
+      rest.textContent = '× ' + h + ' px';
+      pct.textContent = Math.round(z * 100) + '%';
     }
-    var rs = editor.settings.rendererSettings;
-    document.getElementById('hint').textContent = rs.naturalSize
-      ? '書き出し ' + img.naturalWidth + 'px（原寸）'
-      : '書き出し ' + rs.width + 'px（原寸 ' + img.naturalWidth + 'px から縮小）';
+
+    // 幅を打ち込んだら、そこから倍率を逆算して表示にも反映する（見たまま＝保存されるサイズ）。
+    function applyWidth() {
+      var v = parseInt(wIn.value, 10);
+      var z = (!v || v <= 0) ? 1 : Math.min(1, Math.max(0.05, v / img.naturalWidth));
+      ma.zoomLevel = z;
+      if (ma.applyTransform) ma.applyTransform();  // 代入だけでは再描画されない
+      syncExportSize();                            // 実際に効いた倍率で表示を作り直す
+    }
+    wIn.addEventListener('change', applyWidth);
+    wIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') applyWidth(); });
+
+    // capture 指定が要点: ズームボタンにも保存ボタンにも、各自の処理より**先に**走るので、
+    // 保存がレンダリングを始める時点では倍率が既に反映されている。
+    // 同期分は保存ボタン用(そのクリックの処理が走る前に設定を確定させる)、
+    // setTimeout 分はズームボタン用(倍率が変わるのはボタン自身の処理なので、その後に読み直す)。
+    function syncBoth() { syncExportSize(); setTimeout(syncExportSize, 0); }
+    editor.shadowRoot.addEventListener('click', syncBoth, true);
+    editor.shadowRoot.addEventListener('wheel', syncBoth, true);
+    syncExportSize();
 
     if (saved) {
       try { editor.restoreState(saved); say('前回の注釈を復元'); }

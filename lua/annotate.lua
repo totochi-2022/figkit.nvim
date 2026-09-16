@@ -19,12 +19,6 @@ local M = {}
 local PORT = 31624
 local SERVER_PY = vim.fn.expand('~/.config/nvim/vivify/annot/server.py')
 
--- 合成 .ann.png の書き出し最大幅[px]。0 で原寸。
--- 各ビューアは img に max-width:100% を掛けるので、カラム幅(Vivify 900 / GitHub 約890)より
--- 大きく出しても表示は変わらない。**表示まで小さくしたいのでカラム幅より小さく出す**。
--- md に {width=..} や <img> を書かずに全ビューアで効くのが利点(自前ツールの ](..) 前提も壊さない)。
--- 原本と state は残るので、この値を変えて焼き直せば何度でもやり直せる。
-local MAX_WIDTH = 720
 
 -- 注釈対象にする拡張子。svg は draw.io / figure studio の領分なので含めない。
 local RASTER = { png = true, jpg = true, jpeg = true, webp = true, gif = true, bmp = true }
@@ -96,9 +90,9 @@ function M.open(path, md_buf)
     end
 
     local started = ensure_server()
-    local url = string.format('http://localhost:%d/annot?f=%s&sock=%s&buf=%d&maxw=%d',
+    local url = string.format('http://localhost:%d/annot?f=%s&sock=%s&buf=%d',
         PORT, urlenc(orig), urlenc(servername()),
-        md_buf or vim.api.nvim_get_current_buf(), MAX_WIDTH)
+        md_buf or vim.api.nvim_get_current_buf())
 
     local ch = vim.g.nvim_server_channel
     vim.defer_fn(function()
@@ -110,7 +104,7 @@ function M.open(path, md_buf)
     end, started and 1200 or 150)
 
     vim.notify('注釈: ' .. vim.fn.fnamemodify(orig, ':t')
-        .. string.format('（保存で .ann.png を生成＋リンク差替 / 最大幅 %dpx）', MAX_WIDTH),
+        .. '（右下の −/+ で縮小した大きさで .ann.png を生成＋リンク差替）',
         vim.log.levels.INFO)
 end
 
