@@ -38,6 +38,7 @@
   var orig = q.get('f') || '';    // 原本の絶対パス（サーバが読み書きの基準にする）
   var sock = q.get('sock') || ''; // 呼び出し元 nvim の v:servername（保存通知先）
   var buf  = q.get('buf') || '';  // リンク元 md のバッファ番号
+  var maxw = parseInt(q.get('maxw') || '0', 10) || 0; // 書き出す .ann.png の最大幅(0=原寸)
 
   var nameEl = document.getElementById('name');
   var msgEl  = document.getElementById('msg');
@@ -70,10 +71,26 @@
     editor.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     document.getElementById('host').appendChild(editor);
 
-    // 合成 png は原寸で出す（プレビュー幅でリサイズされた画をファイルにしない）。
+    // 合成 png の書き出しサイズ。
+    // 各ビューア(Vivify/GitHub/VSCode)は img に max-width:100% を掛けるので、カラム幅
+    // (Vivify 900px / GitHub 約890px)より大きく出しても表示は変わらない。表示まで小さく
+    // したいならカラム幅より小さく出す必要がある＝ここで決める。
+    // 原本と state は残るので、後から maxw を変えて焼き直せば何度でもやり直せる。
     editor.settings.renderOnSave = true;
-    editor.settings.rendererSettings.naturalSize = true;
     editor.settings.rendererSettings.imageType = 'image/png';
+    if (maxw > 0 && img.naturalWidth > maxw) {
+      // 縦横比を保って縮小。width/height は両方を設定しないと効かない。
+      editor.settings.rendererSettings.naturalSize = false;
+      editor.settings.rendererSettings.width = maxw;
+      editor.settings.rendererSettings.height =
+        Math.round(img.naturalHeight * (maxw / img.naturalWidth));
+    } else {
+      editor.settings.rendererSettings.naturalSize = true; // 元から小さい画像は拡大しない
+    }
+    var rs = editor.settings.rendererSettings;
+    document.getElementById('hint').textContent = rs.naturalSize
+      ? '書き出し ' + img.naturalWidth + 'px（原寸）'
+      : '書き出し ' + rs.width + 'px（原寸 ' + img.naturalWidth + 'px から縮小）';
 
     if (saved) {
       try { editor.restoreState(saved); say('前回の注釈を復元'); }
