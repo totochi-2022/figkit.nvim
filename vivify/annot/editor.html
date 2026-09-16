@@ -14,6 +14,8 @@
     padding: .35rem .6rem; font-size: 12px; border-bottom: 1px solid #8884;
   }
   #name { font-weight: 600; }
+  #mosaic, #grain { font: inherit; font-size: 12px; padding: .1rem .4rem; cursor: pointer; }
+  #mosaic.on { background: #3b82f6; color: #fff; border-color: #3b82f6; }
   #note { opacity: .6; }
   #msg { margin-left: auto; opacity: .85; }
   #msg.err { color: #e06c75; opacity: 1; }
@@ -37,6 +39,12 @@
 <body>
 <div id="bar">
   <span id="name">…</span>
+  <button id="mosaic" type="button" title="ドラッグした矩形をモザイクで潰します">▦ モザイク</button>
+  <select id="grain" title="モザイクの粗さ">
+    <option value="8">細かい</option>
+    <option value="14" selected>ふつう</option>
+    <option value="26">粗い</option>
+  </select>
   <span id="note">右下の − / + か、幅の直接入力で決めた大きさがそのまま保存されます</span>
   <span id="msg"></span>
 </div>
@@ -58,7 +66,9 @@
   var sock = q.get('sock') || ''; // 呼び出し元 nvim の v:servername（保存通知先）
   var buf  = q.get('buf') || '';  // リンク元 md のバッファ番号
 
-  var nameEl = document.getElementById('name');
+  var nameEl   = document.getElementById('name');
+  var grainSel = document.getElementById('grain');
+  var mosaicBtn = document.getElementById('mosaic');
   var msgEl  = document.getElementById('msg');
   nameEl.textContent = orig.split('/').pop() || '(no file)';
   document.title = 'annot: ' + nameEl.textContent;
@@ -75,6 +85,23 @@
   var img = new Image();
   img.src = '/img?p=' + encodeURIComponent(orig);
 
+  // 画像全体を一度だけモザイク化した data URL を作る。
+  // 各モザイクマーカーはこれを「原本と同じ座標」に置いてクリップするだけなので、
+  // 矩形を動かしても常にその真下の領域が出る（切り出しを貼る方式だと古い絵が付いてくる）。
+  function makeMosaicUrl(image, block) {
+    var w = image.naturalWidth, h = image.naturalHeight;
+    var sw = Math.max(1, Math.round(w / block)), sh = Math.max(1, Math.round(h / block));
+    var small = document.createElement('canvas');
+    small.width = sw; small.height = sh;
+    small.getContext('2d').drawImage(image, 0, 0, sw, sh);   // 一旦うんと縮めて
+    var big = document.createElement('canvas');
+    big.width = w; big.height = h;
+    var c = big.getContext('2d');
+    c.imageSmoothingEnabled = false;                          // 補間なしで戻す = ブロック状になる
+    c.drawImage(small, 0, 0, sw, sh, 0, 0, w, h);
+    return big.toDataURL('image/png');
+  }
+
   Promise.all([
     new Promise(function (resolve, reject) {
       img.onload = resolve;
@@ -84,12 +111,69 @@
   ]).then(function (res) {
     var saved = res[1] && res[1].state;
 
+    // --- 自作マーカー: モザイク -------------------------------------------------
+    // 原本と同じ大きさのモザイク画像を、マーカーの矩形でクリップして見せる。
+    // 中身の座標は -left/-top にずらすので、動かしてもリサイズしても真下の領域が出る。
+    var mosaicUrl = makeMosaicUrl(img, parseInt(grainSel.value, 10));
+    var mosaicSeq = 0;
+    var NS = 'http://www.w3.org/2000/svg';
+
+    class MosaicMarker extends markerjs3.ShapeOutlineMarkerBase {
+      static typeName = 'MosaicMarker';
+      static title = 'Mosaic';
+      static applyDefaultFilter = false; // 影が付くと潰した感じが濁るので切る
+
+      constructor(container) {
+        super(container);
+        this.strokeWidth = 0;
+        this._clipId = 'mosaic-clip-' + (++mosaicSeq);
+      }
+
+      createVisual() {
+        var g = document.createElementNS(NS, 'g');
+        var clip = document.createElementNS(NS, 'clipPath');
+        clip.id = this._clipId;
+        this._clipRect = document.createElementNS(NS, 'rect');
+        clip.appendChild(this._clipRect);
+        this._image = document.createElementNS(NS, 'image');
+        this._image.setAttribute('href', mosaicUrl);
+        this._image.setAttribute('width', img.naturalWidth);
+        this._image.setAttribute('height', img.naturalHeight);
+        this._image.setAttribute('preserveAspectRatio', 'none');
+        this._image.setAttribute('clip-path', 'url(#' + this._clipId + ')');
+        this._image.dataset.mosaic = '1';   // 粗さ変更時に href を貼り替える目印
+        g.appendChild(clip);
+        g.appendChild(this._image);
+        this.visual = g;
+        this.addMarkerVisualToContainer(g);
+        this.adjustMosaic();
+      }
+
+      adjustMosaic() {
+        if (!this._image) return;
+        this._clipRect.setAttribute('x', 0);
+        this._clipRect.setAttribute('y', 0);
+        this._clipRect.setAttribute('width', Math.max(0, this.width));
+        this._clipRect.setAttribute('height', Math.max(0, this.height));
+        this._image.setAttribute('x', -this.left);
+        this._image.setAttribute('y', -this.top);
+      }
+
+      adjustVisual() { this.adjustMosaic(); }
+      setSize() { super.setSize(); this.adjustMosaic(); }
+      moveVisual(point) { super.moveVisual(point); this.adjustMosaic(); }
+      ownsTarget(el) { return super.ownsTarget(el) || el === this._image; }
+    }
+    // ---------------------------------------------------------------------------
+
     var editor = new markerjsUI.AnnotationEditor();
     editor.targetImage = img;
     editor.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     document.getElementById('host').appendChild(editor);
 
-    editor.settings.renderOnSave = true;
+    // 内蔵のレンダラは自作マーカー型を知らない＝モザイクが焼かれない。
+    // そこで書き出しは自前の Renderer で行う（registerMarkerType で型を教えられる）。
+    editor.settings.renderOnSave = false;
     editor.settings.rendererSettings.imageType = 'image/png';
     // 読み込み直後を必ず 100% にする。自動ズームが効くと「見たまま」が
     // ペイン幅次第で変わってしまい、書き出しサイズが予測できなくなる。
@@ -99,6 +183,28 @@
     // 書き出しサイズ = 編集画面の表示倍率（右下の − / ⊡ / + で変えた値）。
     // 見たままが保存される。拡大方向には焼かない（水増ししてもボケるだけなので 100% で頭打ち）。
     var ma   = editor.markerArea;
+
+    // 自作型を編集側に登録。矩形をドラッグして作る型なので編集UIは既製の
+    // ShapeOutlineMarkerEditor をそのまま使う。
+    ma.registerMarkerType(MosaicMarker, markerjs3.ShapeOutlineMarkerEditor);
+
+    mosaicBtn.addEventListener('click', function () {
+      ma.createMarker(MosaicMarker);  // 以後、画像上をドラッグすると矩形が引ける
+      mosaicBtn.classList.add('on');
+    });
+    // 他のツールを選んだら押下表示を戻す
+    editor.shadowRoot.addEventListener('click', function () {
+      setTimeout(function () { mosaicBtn.classList.remove('on'); }, 0);
+    }, true);
+
+    // 粗さ変更: モザイク画像を作り直し、既存マーカーの href を貼り替える
+    grainSel.addEventListener('change', function () {
+      mosaicUrl = makeMosaicUrl(img, parseInt(grainSel.value, 10));
+      ma.shadowRoot.querySelectorAll('image[data-mosaic]').forEach(function (el) {
+        el.setAttribute('href', mosaicUrl);
+      });
+    });
+
     var wIn  = document.getElementById('w');
     var rest = document.getElementById('rest');
     var pct  = document.getElementById('pct');
@@ -146,15 +252,28 @@
       catch (e) { say('state の復元に失敗: ' + e.message, true); }
     }
 
+    // state から PNG を焼く。サイズは右下パネルの設定をそのまま使う。
+    function rasterize(state) {
+      var rs = editor.settings.rendererSettings;
+      var r = new markerjs3.Renderer();
+      r.targetImage = img;
+      r.registerMarkerType(MosaicMarker);
+      r.naturalSize = rs.naturalSize;
+      r.imageType = rs.imageType;
+      if (!rs.naturalSize) { r.width = rs.width; r.height = rs.height; }
+      return r.rasterize(state);
+    }
+
     editor.addEventListener('editorsave', function (ev) {
       say('保存中…');
+      rasterize(ev.detail.state).then(function (dataUrl) {
       fetch('/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           orig: orig, sock: sock, buf: buf,
           state: ev.detail.state,
-          dataUrl: ev.detail.dataUrl,
+          dataUrl: dataUrl,
         }),
       })
         .then(function (r) { return r.json(); })
@@ -163,6 +282,7 @@
           else { say('保存失敗: ' + (r.error || '?'), true); }
         })
         .catch(function (e) { say('保存失敗: ' + e.message, true); });
+      }).catch(function (e) { say('書き出し失敗: ' + e.message, true); });
     });
 
     editor.addEventListener('editorclose', function () {
