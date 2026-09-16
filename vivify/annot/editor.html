@@ -34,6 +34,9 @@
   }
   #w { width: 4.2rem; font: inherit; text-align: right; padding: .1rem .2rem; }
   #pct { opacity: .7; }
+  #sizebox .lbl { opacity: .7; }
+  #view { opacity: .55; border-left: 1px solid #8884; padding-left: .45rem; }
+  #fit { font: inherit; font-size: 11px; padding: 0 .3rem; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -45,14 +48,17 @@
     <option value="14" selected>ふつう</option>
     <option value="26">粗い</option>
   </select>
-  <span id="note">右下の − / + か、幅の直接入力で決めた大きさがそのまま保存されます</span>
+  <span id="note">保存サイズは右下の「書き出し」欄。 − / + は表示だけで保存サイズは変わりません</span>
   <span id="msg"></span>
 </div>
 <div id="host"></div>
-<div id="sizebox" title="書き出しサイズ。幅を入れると倍率が決まります（空にすると 100%）">
-  <input id="w" type="number" min="16" step="10">
+<div id="sizebox">
+  <span class="lbl">書き出し</span>
+  <input id="w" type="number" min="16" step="10" title="保存される画像の幅[px]。空にすると原寸">
   <span id="rest">×  ―</span>
   <span id="pct">―</span>
+  <button id="fit" type="button" title="表示を書き出しサイズに合わせて確認する">⇄</button>
+  <span id="view">表示 100%</span>
 </div>
 
 <!-- markerjs3(グローバル markerjs3) → markerjs-ui(グローバル markerjsUI) の順で読む -->
@@ -209,47 +215,63 @@
       });
     });
 
-    var wIn  = document.getElementById('w');
-    var rest = document.getElementById('rest');
-    var pct  = document.getElementById('pct');
+    var wIn    = document.getElementById('w');
+    var rest   = document.getElementById('rest');
+    var pct    = document.getElementById('pct');
+    var viewEl = document.getElementById('view');
+    var fitBtn = document.getElementById('fit');
 
     // 表示倍率 → 書き出しサイズ。拡大方向には焼かない(水増ししてもボケるだけ)ので 100% で頭打ち。
-    function syncExportSize(keepInput) {
-      var z  = Math.min(1, ma.zoomLevel || 1);
-      var w  = Math.round(img.naturalWidth * z);
+    // 書き出し幅は**表示倍率と独立**に持つ。
+    // 以前は「表示倍率＝書き出しサイズ」にしていたが、小さく出したいときに縮小表示のまま
+    // 作業することになり、文字が打ちにくかった。分けておけば、表示は 100% に戻して普通に
+    // 編集しつつ、保存されるのは指定した幅、という使い方ができる。
+    var exportW = img.naturalWidth;
+
+    function updateExport(keepInput) {
+      exportW = Math.max(16, Math.min(img.naturalWidth, Math.round(exportW)));
+      var z  = exportW / img.naturalWidth;
       var h  = Math.round(img.naturalHeight * z);
       var rs = editor.settings.rendererSettings;
       if (z >= 1) {
         rs.naturalSize = true;            // 原寸
       } else {
         rs.naturalSize = false;           // width/height は両方を設定しないと効かない
-        rs.width = w;
+        rs.width = exportW;
         rs.height = h;
       }
-      if (!keepInput) wIn.value = w;
+      if (!keepInput) wIn.value = exportW;
       rest.textContent = '× ' + h + ' px';
       pct.textContent = Math.round(z * 100) + '%';
     }
 
-    // 幅を打ち込んだら、そこから倍率を逆算して表示にも反映する（見たまま＝保存されるサイズ）。
+    function updateView() {
+      viewEl.textContent = '表示 ' + Math.round((ma.zoomLevel || 1) * 100) + '%';
+    }
+
+    // 表示を書き出しサイズに合わせる（仕上がりの確認用）。
+    function fitViewToExport() {
+      ma.zoomLevel = exportW / img.naturalWidth;
+      if (ma.applyTransform) ma.applyTransform();   // 代入だけでは再描画されない
+      updateView();
+    }
+
     function applyWidth() {
       var v = parseInt(wIn.value, 10);
-      var z = (!v || v <= 0) ? 1 : Math.min(1, Math.max(0.05, v / img.naturalWidth));
-      ma.zoomLevel = z;
-      if (ma.applyTransform) ma.applyTransform();  // 代入だけでは再描画されない
-      syncExportSize();                            // 実際に効いた倍率で表示を作り直す
+      exportW = (!v || v <= 0) ? img.naturalWidth : v;
+      updateExport();
+      fitViewToExport();   // 打ち込んだ直後は仕上がりを見せる（その後 + で戻して編集できる）
     }
     wIn.addEventListener('change', applyWidth);
     wIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') applyWidth(); });
+    fitBtn.addEventListener('click', fitViewToExport);
 
-    // capture 指定が要点: ズームボタンにも保存ボタンにも、各自の処理より**先に**走るので、
-    // 保存がレンダリングを始める時点では倍率が既に反映されている。
-    // 同期分は保存ボタン用(そのクリックの処理が走る前に設定を確定させる)、
-    // setTimeout 分はズームボタン用(倍率が変わるのはボタン自身の処理なので、その後に読み直す)。
-    function syncBoth() { syncExportSize(); setTimeout(syncExportSize, 0); }
-    editor.shadowRoot.addEventListener('click', syncBoth, true);
-    editor.shadowRoot.addEventListener('wheel', syncBoth, true);
-    syncExportSize();
+    // ズームボタン/ホイールは**表示だけ**を変える（書き出し幅には触らない）。
+    function onZoomed() { setTimeout(updateView, 0); }
+    editor.shadowRoot.addEventListener('click', onZoomed, true);
+    editor.shadowRoot.addEventListener('wheel', onZoomed, true);
+    updateExport();
+    updateView();
 
     if (saved) {
       try { editor.restoreState(saved); say('前回の注釈を復元'); }
@@ -280,7 +302,7 @@
     }
 
     function rasterize(state) {
-      syncExportSize();   // ピンチ等でボタンを経由せず倍率が変わっていても取りこぼさない
+      updateExport(true); // 入力欄の値を正として設定を確定させる
       var rs = editor.settings.rendererSettings;
       var r = new markerjs3.Renderer();
       r.targetImage = img;
