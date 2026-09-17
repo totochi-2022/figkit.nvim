@@ -1,4 +1,5 @@
--- annotate.lua — スクショ等の画像に marker.js 3 で注釈を付ける（`,,e` / :Annot）。
+-- annotate.lua — スクショ等の画像に marker.js 3 で注釈を付ける。
+-- 入口は figure.lua（`,,e` = :FigEditAuto の振り分け先 / :FigAnnotateImage で直接も可）。
 --
 -- figure studio(diagram.lua)が「Python ソース → 図」なのに対し、こちらは
 -- 「既にある画像 → 注釈を重ねる」担当。draw.io と同じく round-trip できる:
@@ -138,27 +139,11 @@ function M.on_saved(info)
     return 0 -- --remote-expr の戻り値（数値にして余計な出力を出さない）
 end
 
--- OpenDrawio(,,e)から: ラスタ画像なら注釈エディタで開いて true。svg 等なら false。
+-- figure.edit_auto(,,e)から: ラスタ画像なら注釈エディタで開いて true。svg 等なら false。
 function M.try_edit_file(path, md_buf)
     if not path or not is_raster(path) then return false end
     M.open(path, md_buf)
     return true
-end
-
-function M.setup()
-    vim.api.nvim_create_user_command('Annot', function(o)
-        local md_buf = vim.api.nvim_get_current_buf()
-        local target = vim.trim(o.args)
-        if target == '' then
-            local line = vim.api.nvim_get_current_line()
-            target = line:match('%]%(([^)?#]+)') or line:match('image%(%s*"([^"]+)"') or ''
-        end
-        if target == '' then
-            vim.notify('カーソル行に画像リンクがありません（:Annot <path> でも可）', vim.log.levels.WARN)
-            return
-        end
-        M.open(target, md_buf)
-    end, { nargs = '?', complete = 'file', desc = '画像に marker.js で注釈（保存で .ann.png 生成）' })
 end
 
 return M

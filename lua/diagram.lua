@@ -9,7 +9,7 @@
 --   ※ ページ再描画はツールバー操作時のみ。編集中(vim)は再描画されないので端末は繋ぎっぱなし。
 --
 -- 方式は draw.io と同思想(SVG固定・<metadata> にソース埋込・round-trip):
---   ・新規: :Studio [schemdraw|matplotlib|svg] → 現 md/typst の assets に <ts>.fig.svg を作り
+--   ・新規: :FigNewFromTemplate (,,m) → 現 md/typst の assets に <ts>.fig.svg を作り
 --           リンク挿入、テンプレを載せて studio を開く。
 --   ・編集: ![](x.svg) 上で ,,e → 埋込ソースを復元して studio を開く → :w で上書き。
 
@@ -26,6 +26,7 @@ local CACHE = vim.fn.stdpath('cache') .. '/figstudio'
 -- 補完は pyright に任せる。schemdraw は svg 出力のときだけ svg バックエンド(png は matplotlib)。
 local TEMPLATES = {
     schemdraw = table.concat({
+        "import figkit  # ,,p で図と認識させる印",
         "import schemdraw",
         "import schemdraw.elements as elm",
         "if out.endswith('.svg'):",
@@ -38,6 +39,7 @@ local TEMPLATES = {
         "",
     }, "\n"),
     matplotlib = table.concat({
+        "import figkit  # ,,p で図と認識させる印",
         "import numpy as np",
         "import matplotlib.pyplot as plt",
         "x = np.linspace(0, 2 * np.pi, 200)",
@@ -49,6 +51,7 @@ local TEMPLATES = {
         "",
     }, "\n"),
     raw = table.concat({
+        "import figkit  # ,,p で図と認識させる印",
         "open(out, 'w').write('''<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"140\" height=\"60\">",
         "<rect x=\"10\" y=\"10\" width=\"120\" height=\"40\" rx=\"6\" fill=\"#5599cc\"/>",
         "<text x=\"70\" y=\"36\" text-anchor=\"middle\" fill=\"white\" font-family=\"sans-serif\">hello</text>",
@@ -56,6 +59,7 @@ local TEMPLATES = {
         "",
     }, "\n"),
     rdkit = table.concat({
+        "import figkit  # ,,p で図と認識させる印",
         "from rdkit import Chem",
         "from rdkit.Chem import rdDepictor",
         "from rdkit.Chem.Draw import rdMolDraw2D",
@@ -178,7 +182,19 @@ function M.studio(target, source)
         vim.log.levels.INFO)
 end
 
--- :Studio [template] [fmt] — 新規図を現 md/typst に作成して studio を開く。
+-- Studio を単体で開く（対象ファイルなし）。draw.io アプリと同じ位置づけで、
+-- 成果物はツールバーの「📋 SVGコピー」→ ,,p で md に入れる。
+-- 描画先は cache のスクラッチなので、**assets/ には何も作られない**
+-- ＝ボツにしてもゴミが残らない。
+function M.studio_scratch(kind)
+    vim.fn.mkdir(CACHE, 'p')
+    local target = CACHE .. '/scratch.fig.svg'
+    M.studio(target, TEMPLATES[kind] or TEMPLATES.schemdraw)
+    vim.notify('Studio(スクラッチ): 仕上げたら 📋 SVGコピー → ,,p で md に貼る',
+        vim.log.levels.INFO)
+end
+
+-- :FigNewFromTemplate [template] [fmt] — 新規図を現 md/typst に作成する。
 -- template ∈ {schemdraw,matplotlib,raw}(既定 schemdraw) / fmt ∈ {svg,png}(既定 svg)。
 function M.new(kind, fmt)
     local base = vim.fn.expand('%:p:h')
@@ -198,7 +214,7 @@ function M.new(kind, fmt)
     M.studio(target, TEMPLATES[kind] or TEMPLATES.schemdraw)
 end
 
--- OpenDrawio(,,e)から: 埋込ソース付き画像(svg/png/jpg)なら軽量エディタ(edit_source)で開いて true。
+-- figure.edit_auto(,,e)から: 埋込ソース付き画像(svg/png/jpg)なら軽量エディタ(edit_source)で開いて true。
 -- 違えば false(→呼び出し側が draw.io を開く)。識別は extract_source(=<metadata id="diagram-source">)。
 -- （旧: Streamlit studio を開いていたが、web ペイン内で完結する edit_source に変更）
 function M.try_edit_file(path)
@@ -262,36 +278,6 @@ function M.edit_source(svg, md_buf)
     })
     vim.notify('図ソース編集: ' .. vim.fn.fnamemodify(svg, ':t') .. '（:w で再生成＋preview反映）',
         vim.log.levels.INFO)
-end
-
-function M.setup()
-    -- :FigEdit — カーソル行の ![](*.svg) の埋め込みソースを編集用バッファで開く（studio 不使用）。
-    vim.api.nvim_create_user_command('FigEdit', function()
-        local md_buf = vim.api.nvim_get_current_buf()
-        local line = vim.api.nvim_get_current_line()
-        local rel = line:match('%]%(([^)?#]-%.svg)') -- ?v= 等のクエリ付きも拾う
-        if not rel then
-            vim.notify('カーソル行に ![](*.svg) が見つかりません', vim.log.levels.WARN)
-            return
-        end
-        M.edit_source(resolve(rel), md_buf)
-    end, { desc = '埋め込みSVGの Python ソースを編集（:w で再生成＋preview反映）' })
-
-    vim.api.nvim_create_user_command('Studio', function(o)
-        local kind, fmt
-        for _, a in ipairs(o.fargs) do
-            if TEMPLATES[a] then
-                kind = a
-            elseif a == 'svg' or a == 'png' or a == 'jpg' then
-                fmt = a
-            end
-        end
-        M.new(kind, fmt)
-    end, {
-        nargs = '*',
-        complete = function() return { 'schemdraw', 'matplotlib', 'rdkit', 'raw', 'svg', 'png' } end,
-        desc = 'figure studio: 新規図を作成 :Studio [schemdraw|matplotlib|rdkit|raw] [svg|png]',
-    })
 end
 
 return M

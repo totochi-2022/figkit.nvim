@@ -157,7 +157,7 @@ st.markdown(
 )
 
 if not target or not pyfile:
-    st.warning("nvim から `:Studio` / `,,e` で開いてください（?svg= と ?py= が必要）。")
+    st.warning("nvim から `,,s`(:FigOpenStudio) / `,,m` で開いてください（?svg= と ?py= が必要）。")
     st.stop()
 
 # 保存先 SVG を明示（左の nvim で :w すると ここに再生成/保存される）
@@ -295,7 +295,7 @@ def preview(img_path, py_path):
         b64 = base64.b64encode(data).decode()
         img = f'<img src="data:{mime};base64,{b64}" style="max-width:100%;height:auto">'
         components.html(_box(img), height=520, scrolling=True)
-        # png/jpg は :Studio で既に md に ![] 挿入済み。テキストコピー不可なので 📋 は出さない。
+        # png/jpg は :FigNewFromTemplate で既に md に ![] 挿入済み。テキストコピー不可なので 📋 は出さない。
 
 
 left, right = st.columns(2, gap="small")

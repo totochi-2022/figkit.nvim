@@ -14,9 +14,18 @@ import os
 import re
 import shutil
 import sys
+import types
 import tempfile
 import textwrap
 import unicodedata
+
+# スニペット先頭の `import figkit` を成立させるためのダミーモジュール。
+# これは ,,p(:FigPasteAuto)が「図を作るコードだ」と判別するための印で、
+# 誤って普通の Python を貼って実行してしまう事故を防ぐためのもの。
+# ローカルで exec する以上、完全な防御ではない(誤爆防止と割り切る)。
+# 印はソースに残したまま SVG へ埋め込まれるので、studio から 📋 コピーして
+# ,,p したときにも通る。
+sys.modules.setdefault("figkit", types.ModuleType("figkit"))
 
 # 図の既定フォントサイズ。schemdraw の既定 14 は CJK ラベルだと大きすぎ、端の見切れも招く
 # (_pad_svg_for_cjk で救ってはいるが、そもそも小さいほうが収まりが良い)。
