@@ -36,18 +36,9 @@
   #sizebox .lbl { opacity: .7; }
   #w { width: 4.2rem; font: inherit; text-align: right; padding: .1rem .2rem; }
   #pct { opacity: .7; }
-  #apply, #fit { font: inherit; font-size: 11px; padding: 0 .35rem; cursor: pointer; }
+  #apply { font: inherit; font-size: 11px; padding: 0 .35rem; cursor: pointer; }
   #view { opacity: .55; border-left: 1px solid #8884; padding-left: .45rem; }
 
-  /* 仕上がりプレビュー: 実際に保存される PNG をそのまま原寸で出す */
-  #preview {
-    position: fixed; inset: 0; z-index: 100; background: #000000cc;
-    display: flex; align-items: center; justify-content: center; cursor: zoom-out;
-  }
-  #preview[hidden] { display: none; }
-  #previewInner { max-width: 96vw; max-height: 94vh; overflow: auto; text-align: center; }
-  #previewImg { display: block; margin: 0 auto; background: #fff; box-shadow: 0 2px 16px #0008; }
-  #previewNote { margin-top: .5rem; color: #eee; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -59,7 +50,7 @@
     <option value="14" selected>ふつう</option>
     <option value="26">粗い</option>
   </select>
-  <span id="note">まず右下で作業サイズを決める → あとは原寸で描く（見たままが保存されます）</span>
+  <span id="note">まず右下で作業サイズを決める → あとは原寸で描く（画面がそのまま保存されます）</span>
   <span id="msg"></span>
 </div>
 <div id="host"></div>
@@ -70,15 +61,7 @@
   <span id="rest">×  ―</span>
   <span id="pct">―</span>
   <button id="apply" type="button" title="この大きさで作り直します（描いた注釈は同じ比率で追従します）">適用</button>
-  <button id="fit" type="button" title="実際に保存される PNG を生成して原寸で表示します">仕上がり</button>
-  <span id="view">表示 100%</span>
-</div>
-
-<div id="preview" hidden>
-  <div id="previewInner">
-    <img id="previewImg" alt="">
-    <div id="previewNote"></div>
-  </div>
+  <span id="view" title="編集画面の拡大率。100% のときだけ実寸で見ています（100% に戻すのは右下の ⊡）">表示 100%</span>
 </div>
 
 <!-- markerjs3(グローバル markerjs3) → markerjs-ui(グローバル markerjsUI) の順で読む -->
@@ -114,12 +97,8 @@
   var restEl    = document.getElementById('rest');
   var pctEl     = document.getElementById('pct');
   var applyBtn  = document.getElementById('apply');
-  var fitBtn    = document.getElementById('fit');
   var viewEl    = document.getElementById('view');
   var host      = document.getElementById('host');
-  var preview   = document.getElementById('preview');
-  var previewImg  = document.getElementById('previewImg');
-  var previewNote = document.getElementById('previewNote');
 
   nameEl.textContent = orig.split('/').pop() || '(no file)';
   document.title = 'annot: ' + nameEl.textContent;
@@ -335,21 +314,6 @@
     ma.shadowRoot.querySelectorAll('image[data-mosaic]').forEach(function (el) {
       el.setAttribute('href', mosaicUrl);
     });
-  });
-
-  fitBtn.addEventListener('click', function () {
-    say('仕上がりを生成中…');
-    rasterize(ma.getState()).then(function (dataUrl) {
-      previewImg.src = dataUrl;
-      previewNote.textContent = current.naturalWidth + ' × ' + current.naturalHeight
-        + ' px — 保存されるのはこの画像です（クリックか Esc で閉じる）';
-      preview.hidden = false;
-      say('');
-    }).catch(function (e) { say('仕上がり生成に失敗: ' + e.message, true); });
-  });
-  preview.addEventListener('click', function () { preview.hidden = true; });
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') preview.hidden = true;
   });
 
   // --- 起動 ---------------------------------------------------------------
