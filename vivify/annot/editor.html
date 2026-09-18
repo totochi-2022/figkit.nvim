@@ -43,6 +43,26 @@
   #host { flex: 1 1 auto; min-height: 0; }
   mjsui-annotation-editor { display: block; width: 100%; height: 100%; }
 
+  /* 画像の右下に出すリサイズつまみ。縦横比は固定（幅だけを動かす）。 */
+  #grip {
+    position: fixed; z-index: 20; width: 14px; height: 14px; border-radius: 3px;
+    background: linear-gradient(135deg, #5aa0e0, #9b6ce0);
+    box-shadow: 0 0 0 2px #fff8, 0 1px 3px #0005;
+    cursor: nwse-resize; display: none;
+  }
+  #grip[data-on] { display: block; }
+  /* ドラッグ中の予告枠。作り直しは離したときに一度だけ走らせる。 */
+  #ghost {
+    position: fixed; z-index: 19; border: 2px dashed #9b6ce0; border-radius: 2px;
+    pointer-events: none; display: none;
+  }
+  #ghost[data-on] { display: block; }
+  #ghost span {
+    position: absolute; right: 0; bottom: -1.5rem;
+    font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #9b6ce0; color: #fff; padding: .05rem .35rem; border-radius: 4px;
+  }
+
   /* 作業サイズのパネル。エディタ右下のズームボタンのすぐ上に重ねる */
   #sizebox {
     position: fixed; right: 14px; bottom: 54px; z-index: 10;
@@ -90,6 +110,9 @@
   <button id="apply" type="button" title="この大きさで作り直します（描いた注釈は同じ比率で追従します）">適用</button>
   <span id="view" title="編集画面の拡大率。100% のときだけ実寸で見ています（100% に戻すのは右下の ⊡）">表示 100%</span>
 </div>
+
+<div id="grip" title="ドラッグで作業サイズを変える（縦横比は固定）"></div>
+<div id="ghost"><span></span></div>
 
 <!-- markerjs3(グローバル markerjs3) → markerjs-ui(グローバル markerjsUI) の順で読む -->
 <script src="vendor/markerjs3.umd.js"></script>
@@ -397,6 +420,92 @@
       el.setAttribute('href', mosaicUrl);
     });
   });
+
+  // --- 外形ドラッグでサイズ変更 --------------------------------------------
+  // 画像の右下につまみを出し、ドラッグ中は破線の予告枠だけを動かす。
+  // 作り直し(mount)は重いので、離したときに一度だけ applyWidth() を呼ぶ。
+  var grip  = document.getElementById('grip');
+  var ghost = document.getElementById('ghost');
+  var ghostLabel = ghost.querySelector('span');
+  var dragging = null;
+
+  // いま画面上で画像が占めている矩形。marker.js の中(shadow DOM)にあるので
+  // そこから取る。ズームやパンで動くので、その都度読み直す。
+  function imageRect() {
+    if (!ma || !ma.shadowRoot) return null;
+    var svg = ma.shadowRoot.querySelector('svg');
+    if (!svg) return null;
+    var r = svg.getBoundingClientRect();
+    return (r.width > 0 && r.height > 0) ? r : null;
+  }
+
+  function placeGrip() {
+    if (dragging) return;              // ドラッグ中は動かさない
+    var r = imageRect();
+    if (!r) { grip.removeAttribute('data-on'); return; }
+    // 画像が編集領域からはみ出していると右下は画面外＝つまみに届かない。
+    // 見えている範囲の右下に寄せて、必ず掴めるようにする。
+    var host = document.getElementById('host').getBoundingClientRect();
+    var x = Math.min(r.right, host.right - 8);
+    var y = Math.min(r.bottom, host.bottom - 8);
+    // 右下のサイズパネルと重なると押せないので、重なるときは左へ逃がす。
+    var panel = document.getElementById('sizebox').getBoundingClientRect();
+    if (x > panel.left - 16 && y > panel.top - 16) x = panel.left - 16;
+    grip.style.left = (x - 7) + 'px';
+    grip.style.top  = (y - 7) + 'px';
+    grip.setAttribute('data-on', '1');
+  }
+
+  // ズーム・パン・ウィンドウ変化で位置がずれるので、変化したときだけ追従させる。
+  var lastKey = '';
+  (function follow() {
+    var r = imageRect();
+    var key = r ? [r.left, r.top, r.width, r.height].join(',') : '';
+    if (key !== lastKey) { lastKey = key; placeGrip(); }
+    requestAnimationFrame(follow);
+  })();
+
+  grip.addEventListener('pointerdown', function (e) {
+    var r = imageRect();
+    if (!r || !current) return;
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    dragging = { x: e.clientX, rect: r, w: current.naturalWidth };
+    ghost.style.left = r.left + 'px';
+    ghost.style.top = r.top + 'px';
+    ghost.style.width = r.width + 'px';
+    ghost.style.height = r.height + 'px';
+    ghost.setAttribute('data-on', '1');
+  });
+
+  grip.addEventListener('pointermove', function (e) {
+    if (!dragging) return;
+    var dx = e.clientX - dragging.x;
+    var dispW = Math.max(24, dragging.rect.width + dx);
+    var ratio = dispW / dragging.rect.width;
+    // 画面上の伸縮率をそのまま作業サイズに掛ける。原本より大きくはしない。
+    var w = Math.max(16, Math.min(original.naturalWidth, Math.round(dragging.w * ratio)));
+    var h = Math.max(1, Math.round(original.naturalHeight * w / original.naturalWidth));
+    var shown = dragging.rect.width * (w / dragging.w);
+    ghost.style.width = shown + 'px';
+    ghost.style.height = (shown * dragging.rect.height / dragging.rect.width) + 'px';
+    ghostLabel.textContent = w + ' × ' + h + ' px';
+    dragging.target = w;
+  });
+
+  function endDrag(e) {
+    if (!dragging) return;
+    var w = dragging.target;
+    dragging = null;
+    ghost.removeAttribute('data-on');
+    if (w && w !== current.naturalWidth) {
+      wIn.value = String(w);
+      applyWidth();                    // ここで一度だけ作り直す
+    }
+    placeGrip();
+  }
+  grip.addEventListener('pointerup', endDrag);
+  grip.addEventListener('pointercancel', endDrag);
 
   // --- 起動 ---------------------------------------------------------------
   Promise.all([
