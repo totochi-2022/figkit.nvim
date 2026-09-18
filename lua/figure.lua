@@ -68,6 +68,18 @@ local function put_link(fname, displayable)
     vim.api.nvim_put({ link_for(fname, displayable) }, 'c', true, true)
 end
 
+-- 秒精度のタイムスタンプ名。同じ秒に2回貼ると衝突して**上書き**してしまうので、
+-- 既にあれば -1, -2 … を足す（日記のファイル名と同じ流儀）。
+local function unique_name(dir, stem, ext)
+    local name = stem .. ext
+    local n = 0
+    while vim.fn.filereadable(dir .. '/' .. name) == 1 do
+        n = n + 1
+        name = stem .. '-' .. n .. ext
+    end
+    return name
+end
+
 local function timestamp()
     return os.date('%Y%m%d-%H%M%S')
 end
@@ -97,6 +109,12 @@ end
 -- クリップボードが「我々の図を作る Python スニペット」に見えるか。
 -- マーカー(import figkit)と、レンダラの契約である out への書き出しの両方を要求する。
 local function looks_like_figure_python(s)
+    -- SVG/XML は先に弾く。**我々が作った SVG は Python ソースを <metadata> に
+    -- 埋め込んでいる**ので、中身に import figkit も out も含まれてしまう。
+    -- これを Python と誤認すると SVG 全体をレンダラに流して構文エラーになる。
+    if s:match('<svg') or s:match('<mxfile') or s:match('<mxGraphModel') then
+        return false
+    end
     local has_marker = s:match('%f[%w]import%s+' .. MARKER .. '%f[%W]') ~= nil
     local writes_out = s:match('%f[%w]out%f[%W]') ~= nil
     return has_marker and writes_out
@@ -113,7 +131,7 @@ function M.render_python()
     local dir = assets_dir()
     if not dir then return end
 
-    local fname = timestamp() .. '.fig.svg'
+    local fname = unique_name(dir, timestamp(), '.fig.svg')
     local target = dir .. '/' .. fname
     local errfile = target .. '.err'
     local out = vim.fn.system({ 'python3', RENDER_PY, target, errfile }, src)
@@ -126,9 +144,10 @@ function M.render_python()
 end
 
 -- SVG / mxfile をそのまま assets/ に書く共通部分。
-local function save_clip_as(fname, displayable, note)
+local function save_clip_as(ext, displayable, note)
     local dir = assets_dir()
     if not dir then return end
+    local fname = unique_name(dir, timestamp(), ext)
     vim.fn.writefile(vim.split(clip_text(), '\n', { plain = true }), dir .. '/' .. fname)
     put_link(fname, displayable)
     vim.notify('保存: assets/' .. fname .. (note or ''), vim.log.levels.INFO)
@@ -143,7 +162,7 @@ function M.paste_svg()
         return
     end
     local from_studio = clip:match('id="diagram%-source"') ~= nil
-    save_clip_as(timestamp() .. (from_studio and '.fig.svg' or '.drawio.svg'), true,
+    save_clip_as(from_studio and '.fig.svg' or '.drawio.svg', true,
         from_studio and '（,,e でソースを再編集）' or '（,,e で draw.io が開く）')
 end
 
@@ -154,7 +173,7 @@ function M.paste_drawio_xml()
         vim.notify('クリップボードに draw.io の XML がありません', vim.log.levels.WARN)
         return
     end
-    save_clip_as(timestamp() .. '.drawio', false,
+    save_clip_as('.drawio', false,
         '（XMLは表示不可。draw.ioで「Copy as SVG」推奨）')
 end
 
@@ -167,9 +186,10 @@ end
 function M.paste_auto()
     local clip = clip_text()
 
-    if looks_like_figure_python(clip) then return M.render_python() end
+    -- マークアップを先に見る（上記のとおり SVG は Python を内包しうるため）
     if clip:match('<svg') then return M.paste_svg() end
     if clip:match('<mxfile') or clip:match('<mxGraphModel') then return M.paste_drawio_xml() end
+    if looks_like_figure_python(clip) then return M.render_python() end
 
     -- 画像データ（img-clip の判定を使う。遅延ロードなのでここで require するとロードされる）
     local ok, clipboard = pcall(require, 'img-clip.clipboard')

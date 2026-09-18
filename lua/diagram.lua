@@ -210,8 +210,19 @@ function M.new(kind, fmt)
     local target = dir .. '/' .. fname
     local is_typst = vim.bo.filetype == 'typst' or vim.fn.expand('%:e') == 'typ'
     local link = is_typst and ('#image("assets/' .. fname .. '")') or ('![](assets/' .. fname .. ')')
+    local md_buf = vim.api.nvim_get_current_buf()
     vim.api.nvim_put({ link }, 'c', true, true)
-    M.studio(target, TEMPLATES[kind] or TEMPLATES.schemdraw)
+
+    -- studio は立てない（腰を据えたくなったら ,,s で昇格する）。
+    -- テンプレを一度描画して初期 SVG を作り(ソースも埋め込まれる)、あとは ,,e と同じ
+    -- 分割バッファ経路に合流させる＝ :w で再生成 + preview リロードがそのまま効く。
+    local src = TEMPLATES[kind] or TEMPLATES.schemdraw
+    local out = vim.fn.system({ 'python3', RENDER_PY, target, py_for(target) .. '.err' }, src)
+    if vim.v.shell_error ~= 0 then
+        vim.notify('図の生成エラー: ' .. vim.trim(out), vim.log.levels.ERROR)
+        return
+    end
+    M.edit_source(target, md_buf)
 end
 
 -- figure.edit_auto(,,e)から: 埋込ソース付き画像(svg/png/jpg)なら軽量エディタ(edit_source)で開いて true。
