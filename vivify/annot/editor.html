@@ -9,13 +9,34 @@
   html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
   body { display: flex; flex-direction: column; background: #f6f6f6; }
   @media (prefers-color-scheme: dark) { body { background: #1e1e1e; color: #ddd; } }
+  /* figure studio と同じ見た目の言語に揃える:
+     左のグラデーション帯 + グラデーション文字のタイトル + モノスペースの副題。
+     studio は縦 2rem の見出しだが、こちらは編集領域を優先して1行に収める。 */
   #bar {
-    flex: 0 0 auto; display: flex; gap: .75rem; align-items: center;
-    padding: .35rem .6rem; font-size: 12px; border-bottom: 1px solid #8884;
+    flex: 0 0 auto; display: flex; gap: .7rem; align-items: center;
+    padding: .3rem .6rem; font-size: 12px; border-bottom: 1px solid #8884;
   }
-  #name { font-weight: 600; }
-  #mosaic, #grain { font: inherit; font-size: 12px; padding: .1rem .4rem; cursor: pointer; }
-  #mosaic.on { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+  #accent {
+    width: 8px; height: 26px; border-radius: 4px; flex: 0 0 auto;
+    background: linear-gradient(180deg, #5aa0e0, #9b6ce0);
+  }
+  #title {
+    font-size: 1.15rem; font-weight: 800; letter-spacing: -.02em; line-height: 1.1;
+    background: linear-gradient(90deg, #5aa0e0 10%, #9b6ce0 90%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  #subtitle {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .72rem; letter-spacing: .08em; color: #8b93a7;
+  }
+  #subtitle .arrow { color: #9b6ce0; }
+  #mosaic, #grain { font: inherit; font-size: 12px; padding: .15rem .45rem; cursor: pointer;
+    border: 1px solid #8886; border-radius: 5px; background: transparent; color: inherit; }
+  #mosaic.on {
+    background: linear-gradient(90deg, #5aa0e0, #9b6ce0);
+    color: #fff; border-color: transparent;
+  }
   #note { opacity: .6; }
   #msg { margin-left: auto; opacity: .85; }
   #msg.err { color: #e06c75; opacity: 1; }
@@ -36,14 +57,20 @@
   #sizebox .lbl { opacity: .7; }
   #w { width: 4.2rem; font: inherit; text-align: right; padding: .1rem .2rem; }
   #pct { opacity: .7; }
-  #apply { font: inherit; font-size: 11px; padding: 0 .35rem; cursor: pointer; }
+  #apply { font: inherit; font-size: 11px; padding: .1rem .45rem; cursor: pointer;
+    border: 1px solid transparent; border-radius: 5px; color: #fff;
+    background: linear-gradient(90deg, #5aa0e0, #9b6ce0); }
   #view { opacity: .55; border-left: 1px solid #8884; padding-left: .45rem; }
 
 </style>
 </head>
 <body>
 <div id="bar">
-  <span id="name">…</span>
+  <div id="accent"></div>
+  <div>
+    <div id="title">image&nbsp;annot</div>
+    <div id="subtitle"><span id="name">…</span> <span class="arrow">→</span> 注釈&nbsp;·&nbsp;PNG</div>
+  </div>
   <button id="mosaic" type="button" title="ドラッグした矩形をモザイクで潰します">▦ モザイク</button>
   <select id="grain" title="モザイクの粗さ">
     <option value="8">細かい</option>
