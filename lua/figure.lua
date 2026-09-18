@@ -8,7 +8,7 @@
 --   :FigRenderPython    Python を実行→SVG      :FigEditSource     埋込ソースを編集
 --   :FigPasteSvg        SVG を保存             :FigAnnotateImage  画像に注釈
 --   :FigPasteDrawioXml  mxfile を保存          :FigOpenDrawioApp  draw.io.exe で開く
---   :FigPasteImage      画像を保存
+--   :FigPasteImage      画像を保存             :FigClipInfo       いま何が貼られるか確認
 --   :FigPasteAuto  ← ,,p                       :FigEditAuto  ← ,,e
 --
 --   :FigOpenStudio       ← ,,s  Studio を単体で開く（作る→📋→,,p）
@@ -182,9 +182,49 @@ function M.paste_image()
     vim.cmd('PasteImage')
 end
 
+-- 直前に貼った内容。スクショを撮ったつもりでクリップボードが更新されておらず、
+-- 前の SVG がもう一度貼られる事故が分かりにくいので、同じなら知らせる。
+local last_pasted = nil
+
+--- いま ,,p が何をするかだけ表示する（何も書き込まない）。
+--- 「スクショを撮ったのに SVG が貼られる」等、クリップボードの中身が想像と違うときの確認用。
+function M.clip_info()
+    local clip = clip_text()
+    local kind, detail
+    if clip:match('<svg') then
+        kind = 'SVG'
+        detail = clip:match('id="diagram%-source"') and '→ .fig.svg（studio 産）'
+            or '→ .drawio.svg'
+    elseif clip:match('<mxfile') or clip:match('<mxGraphModel') then
+        kind, detail = 'draw.io XML', '→ .drawio（表示不可）'
+    elseif looks_like_figure_python(clip) then
+        kind, detail = 'Python スニペット', '→ 実行して .fig.svg'
+    else
+        local ok, clipboard = pcall(require, 'img-clip.clipboard')
+        if ok and clipboard and clipboard.content_is_image() then
+            kind, detail = '画像', '→ .png'
+        elseif #clip > 0 then
+            kind = 'ただのテキスト(' .. #clip .. '文字)'
+            detail = '→ 何もしない（Python なら `import ' .. MARKER .. '` が要る）'
+        else
+            kind, detail = '空', '→ 何もしない'
+        end
+    end
+    local same = (last_pasted and clip == last_pasted) and '  ※前回貼ったものと同じ内容' or ''
+    vim.notify('クリップボード: ' .. kind .. ' ' .. detail .. same, vim.log.levels.INFO)
+end
+
 --- クリップボードの中身を判定して振り分ける。
 function M.paste_auto()
     local clip = clip_text()
+
+    -- スクショを撮ったつもりでクリップボードが更新されていないと、直前の SVG が
+    -- もう一度貼られる。黙って通すと気づけないので知らせる。
+    if last_pasted and clip ~= '' and clip == last_pasted then
+        vim.notify('前回と同じ内容を貼っています（クリップボードは更新されましたか？）',
+            vim.log.levels.WARN)
+    end
+    if clip ~= '' then last_pasted = clip end
 
     -- マークアップを先に見る（上記のとおり SVG は Python を内包しうるため）
     if clip:match('<svg') then return M.paste_svg() end
@@ -306,6 +346,8 @@ function M.setup()
         { desc = '図: クリップボードの draw.io XML を保存（表示不可・リンクのみ）' })
     cmd('FigPasteImage', M.paste_image, { desc = '図: クリップボードの画像を保存' })
     cmd('FigPasteAuto', M.paste_auto, { desc = '図: クリップボードを判定して貼り付け' })
+    cmd('FigClipInfo', M.clip_info,
+        { desc = '図: いま ,,p が何をするかだけ表示（書き込まない）' })
 
     -- 直す（カーソル行）
     cmd('FigEditSource', M.edit_source, { desc = '図: 埋込ソースを編集（:w で再生成）' })
