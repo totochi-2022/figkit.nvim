@@ -154,6 +154,19 @@ local function start_ttyd(target, py, sock)
 end
 
 -- studio を開く: 左=ttyd(tmux+nvim) / 右=Vivify(svg)。Streamlit がツールバー+レイアウトを担う。
+-- URL クエリ用のパーセントエンコード（パスに空白等が入っても壊れないように）
+local function urlenc(v)
+    return (tostring(v or ''):gsub('[^%w._~-]', function(c)
+        return string.format('%%%02X', string.byte(c))
+    end))
+end
+
+-- studio から「md に挿入 / md を更新」を押せるように、md 側の情報も渡す。
+--   host    … md を開いている**外側の** nvim(v:servername)。studio 内の nvim とは別物
+--   buf     … その md のバッファ番号
+--   scratch … まだ md に入っていない図か（ボタンの文言が変わる）
+local studio_ctx = { buf = 0, scratch = false }
+
 function M.studio(target, source)
     target = vim.fn.fnamemodify(target, ':p')
     vim.fn.mkdir(CACHE, 'p')
@@ -173,8 +186,10 @@ function M.studio(target, source)
         }, { detach = true })
     end
 
-    local url = string.format('http://localhost:%d/?svg=%s&py=%s&ttyd=%d&sock=%s',
-        STUDIO_PORT, target, py, TTYD_PORT, sock)
+    local url = string.format(
+        'http://localhost:%d/?svg=%s&py=%s&ttyd=%d&sock=%s&host=%s&buf=%d&scratch=%s',
+        STUDIO_PORT, target, py, TTYD_PORT, sock,
+        urlenc(vim.v.servername), studio_ctx.buf, studio_ctx.scratch and '1' or '')
     vim.defer_fn(function()
         vim.fn.jobstart({ 'wslview', url }, { detach = true })
     end, up and 400 or 4000) -- streamlit/ttyd/vivify の listen 待ち
@@ -194,6 +209,7 @@ function M.studio_open(svg)
     if vim.fn.filereadable(svg) == 0 then return false end
     local src = extract_source(svg)
     if not src or src == '' then return false end
+    studio_ctx = { buf = vim.api.nvim_get_current_buf(), scratch = false }
     M.studio(svg, src)
     vim.notify('Studio: ' .. vim.fn.fnamemodify(svg, ':t') .. '（:w でこの図を更新）',
         vim.log.levels.INFO)
@@ -202,6 +218,7 @@ end
 
 function M.studio_scratch(kind)
     vim.fn.mkdir(CACHE, 'p')
+    studio_ctx = { buf = vim.api.nvim_get_current_buf(), scratch = true }
     local target = CACHE .. '/scratch.fig.svg'
     M.studio(target, TEMPLATES[kind] or TEMPLATES.schemdraw)
     vim.notify('Studio(スクラッチ): 仕上げたら 📋 SVGコピー → ,,p で md に貼る',

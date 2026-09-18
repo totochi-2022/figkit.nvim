@@ -300,6 +300,62 @@ function M.edit_auto()
     M.open_drawio_app()
 end
 
+-- ------------------------------------------------- studio からの書き戻し --
+
+--- studio の「📄 md に挿入 / md を更新」ボタンから呼ばれる（外側の nvim で実行される）。
+--- info = { target = studio が書いた SVG のパス, buf = md のバッファ番号, scratch = bool }
+---
+--- scratch（まだ md に無い図）なら assets/ へ複製してリンクを挿入し、
+--- 既存図を開いていたなら target が既に md の図そのものなので preview を更新するだけ。
+--- SVG 本文は渡さない（長いとコマンドラインに載せづらい）。studio が書き終えた
+--- ファイルのパスだけ受け取り、読み出しはこちらで行う。
+function M.studio_commit(info)
+    local target = info and info.target or ''
+    local buf = tonumber(info and info.buf) or 0
+    if target == '' or vim.fn.filereadable(target) == 0 then
+        vim.notify('studio の出力が見つかりません: ' .. tostring(target), vim.log.levels.WARN)
+        return 0
+    end
+    if buf == 0 or not vim.api.nvim_buf_is_valid(buf) then
+        vim.notify('挿入先の md バッファが見つかりません', vim.log.levels.WARN)
+        return 0
+    end
+
+    if not info.scratch then
+        -- 既存図を studio で開いていた場合。ファイルは既に md が指しているものなので
+        -- 書き込みは不要で、preview に反映させるだけでよい。
+        pcall(function() require('vivify').reload(buf) end)
+        vim.notify('md のプレビューを更新しました', vim.log.levels.INFO)
+        return 0
+    end
+
+    local md = vim.api.nvim_buf_get_name(buf)
+    if md == '' then
+        vim.notify('md が名前付きで保存されていません', vim.log.levels.WARN)
+        return 0
+    end
+    local dir = vim.fn.fnamemodify(md, ':h') .. '/assets'
+    vim.fn.mkdir(dir, 'p')
+    local fname = unique_name(dir, timestamp(), '.fig.svg')
+    local lines = vim.fn.readfile(target)
+    vim.fn.writefile(lines, dir .. '/' .. fname)
+
+    -- 挿入位置: その md を表示しているウィンドウのカーソル行の下。無ければ末尾。
+    local link = (md:match('%.typ$') and ('#image("assets/' .. fname .. '")')
+                                      or ('![](assets/' .. fname .. ')'))
+    local row = vim.api.nvim_buf_line_count(buf)
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_get_buf(win) == buf then
+            row = vim.api.nvim_win_get_cursor(win)[1]
+            break
+        end
+    end
+    vim.api.nvim_buf_set_lines(buf, row, row, false, { link })
+    pcall(function() require('vivify').reload(buf) end)
+    vim.notify('md に挿入: assets/' .. fname .. '（,,e でソースを再編集）', vim.log.levels.INFO)
+    return 0
+end
+
 -- ------------------------------------------------------------ 新規作成 --
 
 --- Studio を開く。

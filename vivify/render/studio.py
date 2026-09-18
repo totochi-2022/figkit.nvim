@@ -93,7 +93,8 @@ def _jump_server():
     """GET /jump?line=N を受けて nvim(--server sock) のカーソルを N 行目へ動かす小サーバ。
     `st.cache_resource` でプロセスに1本だけ常駐(再実行しても再起動しない)。sock は毎 run で更新。
     reload_vim(RPC)の逆方向。ツール非依存(行番号を動かすだけ)。"""
-    state = {"sock": ""}
+    # sock: studio 内の nvim(ttyd)。host: md を開いている**外側の** nvim。
+    state = {"sock": "", "host": "", "buf": "", "target": "", "scratch": ""}
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -109,6 +110,23 @@ def _jump_server():
                         subprocess.run(
                             ["nvim", "--server", sk, "--remote-send", f"<C-\\><C-n>{line}G"],
                             check=False, capture_output=True, timeout=5,
+                        )
+                elif u.path == "/commit":
+                    # 「md に挿入 / md を更新」ボタン。外側の nvim に figure.lua を叩かせる。
+                    # SVG 本文は渡さない（長いとコマンドラインに載せづらい）。既に出来上がって
+                    # いるファイルのパスだけ渡し、nvim 側で assets へ複製＋リンク挿入させる。
+                    host = state["host"]
+                    if host:
+                        payload = json.dumps({
+                            "target": state["target"],
+                            "buf": state["buf"],
+                            "scratch": bool(state["scratch"]),
+                        }, ensure_ascii=False).replace("'", "''")
+                        expr = ("luaeval(\"require('figure').studio_commit("
+                                "vim.fn.json_decode(_A))\", '%s')" % payload)
+                        subprocess.run(
+                            ["nvim", "--server", host, "--remote-expr", expr],
+                            check=False, capture_output=True, timeout=10,
                         )
             except Exception:  # noqa: BLE001,S110
                 pass
@@ -135,7 +153,15 @@ target = st.query_params.get("svg", "")
 pyfile = st.query_params.get("py", "")
 ttyd_port = st.query_params.get("ttyd", "7690")
 sock = st.query_params.get("sock", "")
-_jump_server()["sock"] = sock  # クリックジャンプの宛先 nvim を最新化
+host = st.query_params.get("host", "")      # md を開いている外側の nvim
+mdbuf = st.query_params.get("buf", "")
+scratch = st.query_params.get("scratch", "")
+_st = _jump_server()
+_st["sock"] = sock          # クリックジャンプの宛先(studio 内の nvim)を最新化
+_st["host"] = host          # 「md に挿入」の宛先(外側の nvim)
+_st["buf"] = mdbuf
+_st["target"] = target
+_st["scratch"] = scratch
 
 st.markdown(
     """
@@ -177,13 +203,21 @@ with t2:
         except OSError as e:
             st.error(f"テンプレ挿入に失敗: {e}")
 
+# 📋 は「クリップボードへ」、📄 は「md へ直接」。どちらも :w を置き換えるものではない
+# （:w は今までどおり SVG を再生成する）。__COMMIT__ はボタンの文言で、
+# スクラッチなら「md に挿入」、既存図を開いているなら「md を更新」が入る。
 COPY_BTN = """
 <button id="cp" style="font-size:14px;padding:7px 16px;border:none;border-radius:6px;
         background:#5599cc;color:#fff;cursor:pointer;font-family:sans-serif">📋 SVGコピー</button>
+<button id="wr" style="font-size:14px;padding:7px 16px;border:none;border-radius:6px;
+        margin-left:8px;background:linear-gradient(90deg,#5aa0e0,#9b6ce0);color:#fff;
+        cursor:pointer;font-family:sans-serif">📄 __COMMIT__</button>
 <span id="msg" style="margin-left:10px;font-family:sans-serif;color:#2a2;font-size:13px"></span>
 <script>
   const svg = __SVG__;
   const btn = document.getElementById('cp'), msg = document.getElementById('msg');
+  const wr = document.getElementById('wr');
+  const flash = (t) => { msg.textContent = t; setTimeout(() => { msg.textContent = ''; }, 2000); };
   btn.onclick = async () => {
     try { await navigator.clipboard.writeText(svg); }
     catch (e) {
@@ -191,7 +225,13 @@ COPY_BTN = """
       ta.value = svg; document.body.appendChild(ta); ta.select();
       document.execCommand('copy'); ta.remove();
     }
-    msg.textContent = '✅ コピー'; setTimeout(() => { msg.textContent = ''; }, 2000);
+    flash('✅ コピー');
+  };
+  wr.onclick = async () => {
+    try {
+      await fetch('http://127.0.0.1:__PORT__/commit', { mode: 'no-cors' });
+      flash('✅ md へ送りました');
+    } catch (e) { flash('⚠ 失敗: ' + e.message); }
   };
 </script>
 """
@@ -252,6 +292,11 @@ setTimeout(function(){
 """
 
 
+def state_scratch():
+    """スクラッチ（まだ md に入っていない図）かどうか。ボタンの文言を変えるだけに使う。"""
+    return bool(_jump_server().get("scratch"))
+
+
 @st.fragment(run_every="1s")
 def preview(img_path, py_path):
     """右ペインだけ 1秒ごとに再実行(左の端末は再描画しない)。生成エラー時(=<py>.err がある)は
@@ -282,7 +327,13 @@ def preview(img_path, py_path):
             "__PORT__", str(JUMP_PORT)
         )
         components.html(_box(svg_now) + js, height=510, scrolling=True)
-        components.html(COPY_BTN.replace("__SVG__", json.dumps(svg_now)), height=44)
+        commit_label = "md に挿入" if state_scratch() else "md を更新"
+        components.html(
+            COPY_BTN.replace("__SVG__", json.dumps(svg_now))
+            .replace("__COMMIT__", commit_label)
+            .replace("__PORT__", str(JUMP_PORT)),
+            height=44,
+        )
     else:
         try:
             data = open(img_path, "rb").read()
