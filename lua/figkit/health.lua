@@ -154,7 +154,11 @@ function M.check()
             else
                 H.error(('31624 の注釈サーバが古い（/vendor が HTTP %s）'):format(code), {
                     'プラグインを移動/更新する前に起動したサーバが残っている',
-                    'pkill -f annot/server.py で落とす（次回 ,,e で新しいのが上がる）',
+                    -- pkill -f は起動の仕方でコマンドラインが変わる（相対パスで
+                    -- 起動されていると 'annot/server.py' に当たらない）。ポートを
+                    -- 持っている pid を直接止めるほうが確実。
+                    "kill $(ss -ltnHp 'sport = :31624' | grep -o 'pid=[0-9]*' | cut -d= -f2)",
+                    '落とせば次の ,,e で新しいサーバが上がる',
                 })
             end
         end
