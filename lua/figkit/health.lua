@@ -60,7 +60,8 @@ function M.check()
             })
         end
         -- 描画ライブラリはテンプレごと。1つも無ければ図が作れないので error
-        local libs = { schemdraw = '回路図', matplotlib = 'グラフ', rdkit = '化学構造式' }
+        local libs = { schemdraw = '回路図', matplotlib = 'グラフ', rdkit = '化学構造式',
+                       graphviz = '状態遷移図(DOT)' }
         local found = 0
         for mod, what in pairs(libs) do
             if py_has(mod) then
@@ -73,7 +74,12 @@ function M.check()
         end
         if found == 0 then
             H.error('描画ライブラリが1つも無い — どのテンプレも動かない',
-                { 'pip install schemdraw matplotlib rdkit' })
+                { 'pip install schemdraw matplotlib rdkit graphviz' })
+        end
+        -- graphviz(python) は dot コマンドの薄いラッパー。本体が無いと実行時に落ちる
+        if py_has('graphviz') and vim.fn.executable('dot') ~= 1 then
+            H.warn('dot が無い — graphviz テンプレは python 側だけでは描けない',
+                { 'sudo apt install graphviz' })
         end
     end
     -- 同梱スクリプト（パス解決が壊れていないか）

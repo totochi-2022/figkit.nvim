@@ -25,6 +25,16 @@ Markdown/Typst に貼る**図と画像**の「作る / 直す」を Neovim か�
 | `:FigClipInfo` | | いま `,,p` が何をするかだけ表示（書き込まない） |
 | `:FigHealth` | | 依存チェック（= `:checkhealth figkit`） |
 
+`tmpl` は次の5つ:
+
+| テンプレ | 用途 | 追加で要るもの |
+|---|---|---|
+| `schemdraw` | 回路図 | `schemdraw` |
+| `matplotlib` | グラフ | `matplotlib`, `numpy` |
+| `rdkit` | 化学構造式（SMILES→構造） | `rdkit` |
+| `graphviz` | 状態遷移・依存関係（DOT） | `graphviz`(py) + **`dot` 本体** |
+| `raw` | SVG を直書き（雛形だけ欲しいとき） | — |
+
 自動判別に頼らず直接叩く用の個別コマンドもある（`:Fig<Tab>` で一覧）:
 `FigRenderPython` / `FigPasteSvg` / `FigPasteDrawioXml` / `FigPasteImage` /
 `FigEditSource` / `FigAnnotateImage` / `FigOpenDrawioApp`。
@@ -73,7 +83,7 @@ Markdown/Typst に貼る**図と画像**の「作る / 直す」を Neovim か�
 
 **機能ごとに分けて報告する**（依存が多く、欠け方も部分的なので）:
 
-- **図の生成** … python3 / Pillow / schemdraw・matplotlib・rdkit（使うテンプレの分だけ）
+- **図の生成** … python3 / Pillow / schemdraw・matplotlib・rdkit・graphviz（使うテンプレの分だけ）
 - **画像注釈** … 同梱アセット（marker.js 一式）が読めるか。依存は stdlib のみ
 - **Studio** … streamlit / ttyd / tmux / curl / pyright
 - **ポート** … 31624・7690・8501・8770 を**古いプロセスが掴んでいないか**。
@@ -90,7 +100,7 @@ Markdown/Typst に貼る**図と画像**の「作る / 直す」を Neovim か�
 
 | 用途 | 必要なもの |
 |---|---|
-| 図の生成 | `python3` + `schemdraw` / `matplotlib` / `rdkit`（使うものだけ）、`Pillow`（png/jpg 出力とソース埋込） |
+| 図の生成 | `python3` + `schemdraw` / `matplotlib` / `rdkit` / `graphviz`（使うものだけ。graphviz は `dot` 本体も要る）、`Pillow`（png/jpg 出力とソース埋込） |
 | Studio | `streamlit`, `ttyd`, `tmux`, `pyright`（左ペインの補完） |
 | 画像注釈 | **なし**（`server.py` は stdlib のみ。`Pillow` があれば縮小品質が上がる） |
 | クリップボード画像 | [img-clip.nvim](https://github.com/HakonHarnes/img-clip.nvim) |

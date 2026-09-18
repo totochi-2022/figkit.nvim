@@ -67,6 +67,24 @@ local TEMPLATES = {
         "</svg>''')",
         "",
     }, "\n"),
+    -- DOT(graphviz)。状態遷移・依存関係など「箱と矢印」向け。
+    -- graphviz(python)は dot コマンドの薄いラッパーなので、`dot` 本体も要る。
+    graphviz = table.concat({
+        "import figkit  # ,,p で図と認識させる印",
+        "import graphviz",
+        "",
+        "g = graphviz.Digraph()",
+        "g.attr(rankdir='LR')          # LR=横向き / TB=縦向き",
+        "g.attr('node', shape='box', fontname='sans-serif')",
+        "g.edge('待機', '運転', label='起動')",
+        "g.edge('運転', '停止', label='停止PB')",
+        "g.edge('停止', '待機', label='復帰')",
+        "",
+        "# out の拡張子で形式が決まる。graphviz は拡張子を自分で付けるので外して渡す",
+        "fmt = out.rsplit('.', 1)[1]",
+        "g.render(outfile=out, format=fmt, cleanup=True)",
+        "",
+    }, "\n"),
     rdkit = table.concat({
         "import figkit  # ,,p で図と認識させる印",
         "from rdkit import Chem",

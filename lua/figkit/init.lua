@@ -430,7 +430,7 @@ function M.setup(opts)
     require('figkit.annot').config = M.config
 
     local cmd = vim.api.nvim_create_user_command
-    local templates = { 'schemdraw', 'matplotlib', 'rdkit', 'raw' }
+    local templates = { 'schemdraw', 'matplotlib', 'rdkit', 'graphviz', 'raw' }
     local function complete_template() return templates end
 
     -- 作る（クリップボード）
@@ -472,7 +472,7 @@ function M.setup(opts)
         end
         M.new_from_template(kind, fmt)
     end, { nargs = '*',
-           complete = function() return { 'schemdraw', 'matplotlib', 'rdkit', 'raw', 'svg', 'png' } end,
+           complete = function() return { 'schemdraw', 'matplotlib', 'rdkit', 'graphviz', 'raw', 'svg', 'png' } end,
            desc = '図: テンプレから md に直接作成' })
 end
 
