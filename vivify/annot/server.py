@@ -23,6 +23,7 @@ socket へ --remote-expr で on_saved() を叩き、md のリンク差し替え�
 """
 
 import base64
+import io
 import json
 import mimetypes
 import os
@@ -43,6 +44,36 @@ def ann_paths(orig):
     """原本パス → (合成png, stateJson)。<stem>.ann.png / <stem>.ann.json"""
     stem, _ = os.path.splitext(orig)
     return stem + ".ann.png", stem + ".ann.json"
+
+
+def resized_png(path, w):
+    """path を幅 w に縮小した PNG バイト列。縮小しない/できないときは None。
+
+    ブラウザの canvas 縮小(createImageBitmap resizeQuality:'high')より忠実。
+    実測(2560→360、Pillow LANCZOS を基準にした RMS 差): drawImage 一発 8.65 /
+    createImageBitmap 6.21 / Pillow ≈ 0(基準そのもの)。
+    Pillow は figure studio 用に install.sh で入るが、**このサーバは stdlib のみで
+    動くのが取り柄**なので、無ければ None を返してブラウザ側にフォールバックさせる。
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        im = Image.open(path)
+        if w <= 0 or w >= im.width:
+            return None
+        # JS 側のフォールバック(Math.round)と丸めを揃える。Python の round() は
+        # 偶数丸めなので 202.5 → 202、JS は 203 になり、Pillow の有無で高さが 1px ずれる。
+        h = max(1, int(im.height * w / im.width + 0.5))
+        if im.mode not in ("RGB", "RGBA"):
+            im = im.convert("RGBA")
+        buf = io.BytesIO()
+        im.resize((w, h), Image.LANCZOS).save(buf, "PNG")
+        return buf.getvalue()
+    except Exception as e:  # noqa: BLE001
+        print("resize failed: %s" % e, file=sys.stderr)
+        return None
 
 
 def notify_nvim(sock, payload):
@@ -84,12 +115,20 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, code, obj):
         self._send(code, json.dumps(obj, ensure_ascii=False), "application/json; charset=utf-8")
 
-    def _file(self, path, ctype=None):
+    def _file(self, path, ctype=None, resize_header=False):
         if not os.path.isfile(path):
             return self._send(404, "not found")
         ctype = ctype or (mimetypes.guess_type(path)[0] or "application/octet-stream")
         with open(path, "rb") as f:
-            self._send(200, f.read(), ctype)
+            body = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        if resize_header:
+            self.send_header("X-Resize", "none")
+        self.end_headers()
+        self.wfile.write(body)
 
     # --- GET -------------------------------------------------------------
     def do_GET(self):
@@ -111,7 +150,23 @@ class Handler(BaseHTTPRequestHandler):
             p = one("p")
             if not p.lower().endswith(IMAGE_EXTS):
                 return self._send(400, "not an image")
-            return self._file(p)
+            # w= があれば Pillow で縮小して返す。できなければ原寸を返し、
+            # X-Resize ヘッダでどちらだったかをページ側に伝える。
+            try:
+                w = int(one("w") or 0)
+            except ValueError:
+                w = 0
+            if w > 0:
+                data = resized_png(p, w)
+                if data is not None:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Resize", "pillow")
+                    self.end_headers()
+                    return self.wfile.write(data)
+            return self._file(p, resize_header=True)
 
         if u.path == "/state":
             p = one("p")

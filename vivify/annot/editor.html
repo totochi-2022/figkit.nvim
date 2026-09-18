@@ -185,6 +185,23 @@
     return out;
   }
 
+  // 作業サイズの画像を用意する。まず**サーバ(Pillow)に縮小させる**——ブラウザの
+  // createImageBitmap より忠実（実測 2560→360 で、Pillow を基準にした RMS 差が
+  // ブラウザ側 6.21 に対しサーバ側は 0）。Pillow が無い環境ではサーバが原寸を返して
+  // X-Resize: none を付けるので、その場合だけブラウザ側の縮小に落ちる。
+  function workingImage(w) {
+    if (!original || w >= original.naturalWidth) return Promise.resolve(original);
+    return fetch('/img?p=' + encodeURIComponent(orig) + '&w=' + w)
+      .then(function (r) {
+        if (!r.ok) throw new Error('img ' + r.status);
+        if ((r.headers.get('X-Resize') || 'none') !== 'pillow') return null;
+        return r.blob().then(function (b) { return loadImage(URL.createObjectURL(b)); });
+      })
+      .then(function (im) { return im || scaledImage(original, w); })
+      .catch(function () { return scaledImage(original, w); });
+  }
+
+  // フォールバック（サーバで縮小できなかったとき）。
   function scaledImage(src, w) {
     if (w >= src.naturalWidth) return Promise.resolve(src);
     var h = Math.max(1, Math.round(src.naturalHeight * w / src.naturalWidth));
@@ -360,7 +377,7 @@
     if (w === current.naturalWidth) { updatePanel(); return; }
     var state = ma.getState();          // 旧サイズ基準。mount 側で自動調整される
     say('作り直し中…');
-    scaledImage(original, w).then(function (im) {
+    workingImage(w).then(function (im) {
       mount(im, state);
       say('作業サイズ: ' + im.naturalWidth + ' × ' + im.naturalHeight + ' px');
     }).catch(function (e) { say('作り直しに失敗: ' + e.message, true); });
@@ -392,7 +409,7 @@
     // キャンバスの大きさを持つため、こちらで別途保存しなくてよい）。
     var w = (saved && saved.width) ? Math.min(saved.width, original.naturalWidth)
                                    : original.naturalWidth;
-    return scaledImage(original, w).then(function (im) {
+    return workingImage(w).then(function (im) {
       mount(im, saved);
       if (saved) say('前回の注釈を復元');
     });
