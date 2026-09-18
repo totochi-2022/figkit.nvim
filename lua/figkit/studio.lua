@@ -1,4 +1,4 @@
--- diagram.lua — 図(Python→SVG)を Streamlit「figure studio」で編集する。
+-- figkit.studio — 図(Python→SVG)を Streamlit「figure studio」で編集する。
 --
 -- studio = 前からある Streamlit の 2ペインページ。ソース部の Ace を本物の nvim に差し替えた版:
 --   ・左  : ttyd(127.0.0.1:7690) → tmux で nvim を永続起動。設定そのまま=pyright 補完が効く。
@@ -15,11 +15,20 @@
 
 local M = {}
 
+-- init.lua が setup() で注入する（on_change / drawio_exe）。
+M.config = {
+    on_change = function(_buf) end,
+    open_url = function(url, _t) vim.fn.jobstart({ 'wslview', url }, { detach = true }) end,
+}
+
 local TTYD_PORT = 7690           -- 7681 は既存サービスが居るので避ける
 local STUDIO_PORT = 8501         -- Streamlit
 local TMUX_SESSION = 'figstudio'
-local RENDER_PY = vim.fn.expand('~/.config/nvim/vivify/render/render_schemdraw.py')
-local STUDIO_PY = vim.fn.expand('~/.config/nvim/vivify/render/studio.py')
+-- プラグインのルート（このファイルは lua/figkit/ にあるので3つ上）。
+-- 同梱アセット(render/*.py, annot/*)を絶対パスで指すために使う。
+local ROOT = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':p:h:h:h')
+local RENDER_PY = ROOT .. '/render/render_schemdraw.py'
+local STUDIO_PY = ROOT .. '/render/studio.py'
 local CACHE = vim.fn.stdpath('cache') .. '/figstudio'
 
 -- テンプレ(自己完結・`out` に保存すれば何でも可。out の拡張子で svg/png/jpg が決まる)。
@@ -191,7 +200,7 @@ function M.studio(target, source)
         STUDIO_PORT, target, py, TTYD_PORT, sock,
         urlenc(vim.v.servername), studio_ctx.buf, studio_ctx.scratch and '1' or '')
     vim.defer_fn(function()
-        vim.fn.jobstart({ 'wslview', url }, { detach = true })
+        M.config.open_url(url, 'Studio')
     end, up and 400 or 4000) -- streamlit/ttyd/vivify の listen 待ち
     vim.notify('studio: ' .. vim.fn.fnamemodify(target, ':t') .. '（左=nvim/右=SVG, :w で更新）',
         vim.log.levels.INFO)
@@ -352,7 +361,7 @@ function M.edit_source(svg, md_buf)
             regen(bufnr) -- SVG + .err 再生成（エラー時は regen が notify する）
             local mb = vim.b[bufnr].fig_md_buf
             if mb and vim.api.nvim_buf_is_valid(mb) then
-                pcall(function() require('vivify').reload(mb) end) -- preview に cache-bust 反映
+                pcall(M.config and M.config.on_change or function() end, mb) -- preview に cache-bust 反映
             end
         end,
         desc = 'figure(inline): :w で SVG 再生成 + preview reload',

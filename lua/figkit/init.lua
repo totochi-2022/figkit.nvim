@@ -1,4 +1,4 @@
--- figure.lua — md に貼る図・画像の「作る / 直す」をまとめた入口。
+-- figkit.nvim — md に貼る図・画像の「作る / 直す」をまとめた入口。
 --
 -- 道具はすべて独立したコマンドとして登録し、その上に「自動判別」を薄く乗せる。
 -- 判定が外れたときは個別コマンドを直接叩けば回避できる。
@@ -23,13 +23,36 @@
 
 local M = {}
 
-local DRAWIO_EXE = '/mnt/c/Program Files/draw.io/draw.io.exe'
-local RENDER_PY = vim.fn.expand('~/.config/nvim/vivify/render/render_schemdraw.py')
+-- プラグインのルート（このファイルは lua/figkit/ にあるので3つ上）。
+-- 同梱アセット(render/*.py, annot/*)を絶対パスで指すために使う。
+local ROOT = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':p:h:h:h')
+
+local RENDER_PY = ROOT .. '/render/render_schemdraw.py'
 
 -- Python スニペットに要求するマーカー。誤爆防止であってセキュリティではない
 -- （どうせローカルで exec するので完全な防御は無理）。他所からコピーした普通の
 -- Python を間違って ,,p しても、これが無ければ実行されない。
 local MARKER = 'figkit'
+
+-- 設定。setup(opts) で上書きできる。
+M.config = {
+    -- draw.io デスクトップ版の実行ファイル（WSL から Windows 側を叩く）
+    drawio_exe = '/mnt/c/Program Files/draw.io/draw.io.exe',
+    -- 図を書き換えた後に呼ばれる。プレビューを持っている人がここで再読込させる。
+    -- 既定は何もしない（プラグイン単体では preview の所在を知らないため）。
+    on_change = function(_buf) end,
+    -- 注釈エディタ / studio の URL を開く。既定は wslview → vim.ui.open。
+    -- プレビューペインを持っている人はここを差し替えて自分の枠に出せる。
+    open_url = function(url, _title)
+        if vim.fn.executable('wslview') == 1 then
+            vim.fn.jobstart({ 'wslview', url }, { detach = true })
+        elseif vim.ui and vim.ui.open then
+            vim.ui.open(url)
+        else
+            vim.notify('URL を開けませんでした: ' .. url, vim.log.levels.WARN)
+        end
+    end,
+}
 
 -- ---------------------------------------------------------------- helpers --
 
@@ -251,7 +274,7 @@ function M.edit_source()
         vim.notify('カーソル行に図のリンクがありません', vim.log.levels.WARN)
         return
     end
-    require('diagram').edit_source(path, vim.api.nvim_get_current_buf())
+    require('figkit.studio').edit_source(path, vim.api.nvim_get_current_buf())
 end
 
 --- カーソル行の画像に注釈を付ける（marker.js）。
@@ -261,7 +284,7 @@ function M.annotate_image()
         vim.notify('カーソル行に画像のリンクがありません', vim.log.levels.WARN)
         return
     end
-    require('annotate').open(path, vim.api.nvim_get_current_buf())
+    require('figkit.annot').open(path, vim.api.nvim_get_current_buf())
 end
 
 --- カーソル行のファイルを draw.io.exe で開く。
@@ -271,12 +294,12 @@ function M.open_drawio_app()
         vim.notify('カーソル行にファイルがありません', vim.log.levels.WARN)
         return
     end
-    if vim.fn.executable(DRAWIO_EXE) == 0 then
-        vim.notify('draw.io.exeが見つかりません: ' .. DRAWIO_EXE, vim.log.levels.ERROR)
+    if vim.fn.executable(M.config.drawio_exe) == 0 then
+        vim.notify('draw.io.exeが見つかりません: ' .. M.config.drawio_exe, vim.log.levels.ERROR)
         return
     end
-    local winpath = require('wslpath').to_win(path)
-    vim.fn.jobstart({ DRAWIO_EXE, winpath }, { detach = true })
+    local winpath = require('figkit.wslpath').to_win(path)
+    vim.fn.jobstart({ M.config.drawio_exe, winpath }, { detach = true })
     vim.notify('draw.ioで開く: ' .. vim.fn.fnamemodify(path, ':t'), vim.log.levels.INFO)
 end
 
@@ -294,9 +317,9 @@ function M.edit_auto()
 
     local md_buf = vim.api.nvim_get_current_buf()
     -- 埋込ソース付き(studio 産)なら分割バッファで編集。draw.io.exe は要らない。
-    if require('diagram').try_edit_file(path) then return end
+    if require('figkit.studio').try_edit_file(path) then return end
     -- 埋込ソースの無いラスタ画像（スクショ等）は注釈エディタへ。
-    if require('annotate').try_edit_file(path, md_buf) then return end
+    if require('figkit.annot').try_edit_file(path, md_buf) then return end
     -- 残りは draw.io。
     M.open_drawio_app()
 end
@@ -325,7 +348,7 @@ function M.studio_commit(info)
     if not info.scratch then
         -- 既存図を studio で開いていた場合。ファイルは既に md が指しているものなので
         -- 書き込みは不要で、preview に反映させるだけでよい。
-        pcall(function() require('vivify').reload(buf) end)
+        pcall(M.config.on_change, buf)
         vim.notify('md のプレビューを更新しました', vim.log.levels.INFO)
         return 0
     end
@@ -352,7 +375,7 @@ function M.studio_commit(info)
         end
     end
     vim.api.nvim_buf_set_lines(buf, row, row, false, { link })
-    pcall(function() require('vivify').reload(buf) end)
+    pcall(M.config.on_change, buf)
     vim.notify('md に挿入: assets/' .. fname .. '（,,e でソースを再編集）', vim.log.levels.INFO)
     return 0
 end
@@ -366,7 +389,7 @@ end
 --- 化学構造式のように studio でしか出来ない操作(SMILES 検索)があるので、既存図を
 --- 開き直せる入口は要る。スクラッチが欲しいときはテンプレ名を付ければよい。
 function M.open_studio(kind)
-    local diagram = require('diagram')
+    local diagram = require('figkit.studio')
     if kind and kind ~= '' then
         return diagram.studio_scratch(kind)
     end
@@ -385,17 +408,21 @@ end
 --- studio を止める。bang なしは Streamlit だけ（studio.py を書き換えたときの反映用）、
 --- bang 付きは ttyd と tmux も落として完全に片付ける。
 function M.stop_studio(all)
-    require('diagram').studio_stop(all)
+    require('figkit.studio').studio_stop(all)
 end
 
 --- テンプレから md に直接作る（ファイル作成＋リンク挿入＋分割バッファ）。
 function M.new_from_template(kind, fmt)
-    require('diagram').new(kind, fmt)
+    require('figkit.studio').new(kind, fmt)
 end
 
 -- ------------------------------------------------------------ コマンド --
 
-function M.setup()
+function M.setup(opts)
+    M.config = vim.tbl_deep_extend('force', M.config, opts or {})
+    require('figkit.studio').config = M.config
+    require('figkit.annot').config = M.config
+
     local cmd = vim.api.nvim_create_user_command
     local templates = { 'schemdraw', 'matplotlib', 'rdkit', 'raw' }
     local function complete_template() return templates end

@@ -1,7 +1,7 @@
--- annotate.lua — スクショ等の画像に marker.js 3 で注釈を付ける。
--- 入口は figure.lua（`,,e` = :FigEditAuto の振り分け先 / :FigAnnotateImage で直接も可）。
+-- figkit.annot — スクショ等の画像に marker.js 3 で注釈を付ける。
+-- 入口は figkit/init.lua（`,,e` = :FigEditAuto の振り分け先 / :FigAnnotateImage で直接も可）。
 --
--- figure studio(diagram.lua)が「Python ソース → 図」なのに対し、こちらは
+-- figure studio(figkit.studio)が「Python ソース → 図」なのに対し、こちらは
 -- 「既にある画像 → 注釈を重ねる」担当。draw.io と同じく round-trip できる:
 --
 --   assets/<ts>.png       原本(img-clip が置いたもの)。**書き換えない**
@@ -17,8 +17,17 @@
 
 local M = {}
 
+-- init.lua が setup() で注入する。
+M.config = {
+    on_change = function(_buf) end,
+    open_url = function(url, _t) vim.fn.jobstart({ 'wslview', url }, { detach = true }) end,
+}
+
 local PORT = 31624
-local SERVER_PY = vim.fn.expand('~/.config/nvim/vivify/annot/server.py')
+-- プラグインのルート（このファイルは lua/figkit/ にあるので3つ上）。
+-- 同梱アセット(render/*.py, annot/*)を絶対パスで指すために使う。
+local ROOT = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':p:h:h:h')
+local SERVER_PY = ROOT .. '/annot/server.py'
 
 
 -- 注釈対象にする拡張子。svg は draw.io / figure studio の領分なので含めない。
@@ -95,13 +104,8 @@ function M.open(path, md_buf)
         PORT, urlenc(orig), urlenc(servername()),
         md_buf or vim.api.nvim_get_current_buf())
 
-    local ch = vim.g.nvim_server_channel
     vim.defer_fn(function()
-        if type(ch) == 'number' and ch > 0 then
-            vim.rpcnotify(ch, 'web_open_url', url, 'Annot') -- web: 右プレビューペイン
-        else
-            vim.fn.jobstart({ 'wslview', url }, { detach = true }) -- 端末: ブラウザタブ
-        end
+        M.config.open_url(url, 'Annot')
     end, started and 1200 or 150)
 
     vim.notify('注釈: ' .. vim.fn.fnamemodify(orig, ':t')
@@ -134,7 +138,7 @@ function M.on_saved(info)
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     end
 
-    pcall(function() require('vivify').reload(buf) end) -- ?v= を付け直してキャッシュを外す
+    pcall(M.config and M.config.on_change or function() end, buf) -- ?v= を付け直してキャッシュを外す
     vim.notify('注釈を保存: ' .. ann_base .. (hit and '（リンク差替）' or ''), vim.log.levels.INFO)
     return 0 -- --remote-expr の戻り値（数値にして余計な出力を出さない）
 end

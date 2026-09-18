@@ -6,7 +6,7 @@ Ace の代わりに本物の nvim を左ペインに埋める版:
   ・右  : Vivify が ?svg= の SVG をライブ表示。nvim の :w で SVG 再生成 → 右が自動更新。
   ・ツールバー: テンプレ挿入(=?py= のソースを書き換え tmux で nvim をリロード)、📋SVGコピー。
 
-起動: streamlit run studio.py  （通常は diagram.lua が ?svg=&py=&ttyd= 付きで開く）
+起動: streamlit run studio.py  （通常は figkit.studio が ?svg=&py=&ttyd= 付きで開く）
 ページの再描画はツールバー操作時のみ。編集中(vim)は再描画されないので端末は繋ぎっぱなし。
 再描画で端末 iframe が張り直されても tmux セッションに再アタッチするので状態は残る。
 """
@@ -112,7 +112,7 @@ def _jump_server():
                             check=False, capture_output=True, timeout=5,
                         )
                 elif u.path == "/commit":
-                    # 「md に挿入 / md を更新」ボタン。外側の nvim に figure.lua を叩かせる。
+                    # 「md に挿入 / md を更新」ボタン。外側の nvim に figkit を叩かせる。
                     # SVG 本文は渡さない（長いとコマンドラインに載せづらい）。既に出来上がって
                     # いるファイルのパスだけ渡し、nvim 側で assets へ複製＋リンク挿入させる。
                     host = state["host"]
@@ -122,7 +122,7 @@ def _jump_server():
                             "buf": state["buf"],
                             "scratch": bool(state["scratch"]),
                         }, ensure_ascii=False).replace("'", "''")
-                        expr = ("luaeval(\"require('figure').studio_commit("
+                        expr = ("luaeval(\"require('figkit').studio_commit("
                                 "vim.fn.json_decode(_A))\", '%s')" % payload)
                         subprocess.run(
                             ["nvim", "--server", host, "--remote-expr", expr],

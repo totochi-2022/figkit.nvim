@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """annot server — スクショ等の画像に marker.js 3 で注釈を付ける小さなローカルサーバ。
 
-figure studio(Streamlit) と違い依存ゼロ(stdlib のみ)。nvim の annotate.lua から
+figure studio(Streamlit) と違い依存ゼロ(stdlib のみ)。nvim の figkit.annot から
 jobstart で立ち上がり、127.0.0.1 の固定ポートに居座る。
 
 保存モデル（可逆・原本非破壊）:
@@ -85,7 +85,7 @@ def notify_nvim(sock, payload):
     if not sock or not os.path.exists(sock):
         return
     js = json.dumps(payload, ensure_ascii=False).replace("'", "''")
-    expr = "luaeval(\"require('annotate').on_saved(vim.fn.json_decode(_A))\", '%s')" % js
+    expr = "luaeval(\"require('figkit.annot').on_saved(vim.fn.json_decode(_A))\", '%s')" % js
     try:
         subprocess.run(
             ["nvim", "--server", sock, "--remote-expr", expr],
