@@ -274,8 +274,13 @@ function M.open_studio(kind)
         return diagram.studio_scratch(kind)
     end
     local path = path_at_cursor()
-    if path and path:match('%.fig%.svg$') and diagram.studio_open(path) then
-        return
+    if path and path:match('%.fig%.svg$') then
+        if diagram.studio_open(path) then return end
+        -- 図の行に見えたのに開けなかった理由を伝える（黙ってスクラッチに落ちると
+        -- 「その図で開いてくれない」としか見えない）。
+        vim.notify('この図は studio で開けません（埋込ソースが無い / 読めない）: '
+            .. vim.fn.fnamemodify(path, ':t') .. ' → スクラッチで開きます',
+            vim.log.levels.WARN)
     end
     diagram.studio_scratch(nil)
 end
