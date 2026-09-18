@@ -197,6 +197,45 @@ function M.studio(target, source)
         vim.log.levels.INFO)
 end
 
+-- studio を止める。用途が2つあるので強さを分ける。
+--   all=false … Streamlit だけ落とす。**studio.py を書き換えたときの反映用**。
+--                起動中の Streamlit は古いコードを持ったままで、M.studio は「上がっていれば
+--                起動しない」ので、落とさないと変更が効かない。
+--                ttyd と tmux は残すので、左の nvim の編集状態は失われない。
+--   all=true  … ttyd と tmux セッションも落として完全に片付ける。
+--                tmux は編集状態を保持しているので、こちらは明示的に頼まれたときだけ。
+function M.studio_stop(all)
+    local function port_up(port)
+        local out = vim.fn.system({ 'ss', '-ltn' })
+        return out:match(':' .. port .. '%s') ~= nil
+    end
+    local before = { streamlit = port_up(STUDIO_PORT), ttyd = port_up(TTYD_PORT) }
+
+    -- pkill -f は ERE。Lua の %. ではなく \. で書く（ここを取り違えて効いていなかった）
+    vim.fn.system({ 'pkill', '-f', 'streamlit run .*studio\\.py' })
+    if all then
+        if M._ttyd and M._ttyd > 0 then
+            pcall(vim.fn.jobstop, M._ttyd)
+            M._ttyd = nil
+        end
+        vim.fn.system({ 'pkill', '-f', 'ttyd .*-p ' .. TTYD_PORT })
+        vim.fn.system({ 'tmux', 'kill-session', '-t', TMUX_SESSION })
+    end
+
+    vim.fn.system({ 'sleep', '0.4' })
+    local msg = {}
+    table.insert(msg, 'Streamlit(' .. STUDIO_PORT .. '): '
+        .. (before.streamlit and (port_up(STUDIO_PORT) and '停止できず' or '停止') or '元から未起動'))
+    if all then
+        table.insert(msg, 'ttyd(' .. TTYD_PORT .. '): '
+            .. (before.ttyd and (port_up(TTYD_PORT) and '停止できず' or '停止') or '元から未起動'))
+        table.insert(msg, 'tmux ' .. TMUX_SESSION .. ': 削除')
+    else
+        table.insert(msg, 'ttyd/tmux は残した（編集状態を保持）')
+    end
+    vim.notify(table.concat(msg, ' / '), vim.log.levels.INFO)
+end
+
 -- Studio を単体で開く（対象ファイルなし）。draw.io アプリと同じ位置づけで、
 -- 成果物はツールバーの「📋 SVGコピー」→ ,,p で md に入れる。
 -- 描画先は cache のスクラッチなので、**assets/ には何も作られない**

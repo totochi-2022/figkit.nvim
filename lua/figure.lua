@@ -11,7 +11,8 @@
 --   :FigPasteImage      画像を保存             :FigClipInfo       いま何が貼られるか確認
 --   :FigPasteAuto  ← ,,p                       :FigEditAuto  ← ,,e
 --
---   :FigOpenStudio       ← ,,s  Studio を単体で開く（作る→📋→,,p）
+--   :FigOpenStudio       ← ,,s  Studio を開く（作る→📋/📄→md へ）
+--   :FigStopStudio             Studio を止める（! で ttyd/tmux も）
 --   :FigNewFromTemplate  ← ,,m  テンプレから md に直接作る
 --
 -- なぜクリップボード経由に寄せたか:
@@ -381,6 +382,12 @@ function M.open_studio(kind)
     diagram.studio_scratch(nil)
 end
 
+--- studio を止める。bang なしは Streamlit だけ（studio.py を書き換えたときの反映用）、
+--- bang 付きは ttyd と tmux も落として完全に片付ける。
+function M.stop_studio(all)
+    require('diagram').studio_stop(all)
+end
+
 --- テンプレから md に直接作る（ファイル作成＋リンク挿入＋分割バッファ）。
 function M.new_from_template(kind, fmt)
     require('diagram').new(kind, fmt)
@@ -415,6 +422,9 @@ function M.setup()
     cmd('FigOpenStudio', function(o) M.open_studio(o.fargs[1]) end,
         { nargs = '?', complete = complete_template,
           desc = '図: Studio を開く（カーソル行の図があればそれを / 無ければスクラッチ）' })
+    cmd('FigStopStudio', function(o) M.stop_studio(o.bang) end,
+        { bang = true,
+          desc = '図: Studio を止める（! で ttyd/tmux も。既定は Streamlit だけ＝コード反映用）' })
     cmd('FigNewFromTemplate', function(o)
         local kind, fmt
         for _, a in ipairs(o.fargs) do
