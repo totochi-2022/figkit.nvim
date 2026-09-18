@@ -262,10 +262,22 @@ end
 
 -- ------------------------------------------------------------ 新規作成 --
 
---- Studio を単体で開く（対象なし・スクラッチ）。
---- 成果物はツールバーの「📋 SVGコピー」→ ,,p で md に入れる。draw.io と同じ流儀。
+--- Studio を開く。
+---   引数なし + カーソル行に既存の .fig.svg  → **その図**を開く（:w でその図を更新）
+---   引数なし + それ以外                      → スクラッチ（📋 SVGコピー → ,,p で貼る）
+---   引数あり（テンプレ名）                    → そのテンプレでスクラッチ
+--- 化学構造式のように studio でしか出来ない操作(SMILES 検索)があるので、既存図を
+--- 開き直せる入口は要る。スクラッチが欲しいときはテンプレ名を付ければよい。
 function M.open_studio(kind)
-    require('diagram').studio_scratch(kind)
+    local diagram = require('diagram')
+    if kind and kind ~= '' then
+        return diagram.studio_scratch(kind)
+    end
+    local path = path_at_cursor()
+    if path and path:match('%.fig%.svg$') and diagram.studio_open(path) then
+        return
+    end
+    diagram.studio_scratch(nil)
 end
 
 --- テンプレから md に直接作る（ファイル作成＋リンク挿入＋分割バッファ）。
@@ -299,7 +311,7 @@ function M.setup()
     -- 新規作成
     cmd('FigOpenStudio', function(o) M.open_studio(o.fargs[1]) end,
         { nargs = '?', complete = complete_template,
-          desc = '図: Studio を単体で開く（作る→📋SVGコピー→,,p）' })
+          desc = '図: Studio を開く（カーソル行の図があればそれを / 無ければスクラッチ）' })
     cmd('FigNewFromTemplate', function(o)
         local kind, fmt
         for _, a in ipairs(o.fargs) do

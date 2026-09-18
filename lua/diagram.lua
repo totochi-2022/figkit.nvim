@@ -186,6 +186,20 @@ end
 -- 成果物はツールバーの「📋 SVGコピー」→ ,,p で md に入れる。
 -- 描画先は cache のスクラッチなので、**assets/ には何も作られない**
 -- ＝ボツにしてもゴミが残らない。
+-- 既存の図(埋込ソース付き .fig.svg)を studio で開く。保存先はその図自身なので、
+-- studio 側の :w がそのままファイルを更新する＝md のリンクは張り替え不要。
+-- 埋込ソースが無い(draw.io 等)なら false を返して呼び出し側に委ねる。
+function M.studio_open(svg)
+    svg = vim.fn.fnamemodify(vim.fn.expand(svg), ':p')
+    if vim.fn.filereadable(svg) == 0 then return false end
+    local src = extract_source(svg)
+    if not src or src == '' then return false end
+    M.studio(svg, src)
+    vim.notify('Studio: ' .. vim.fn.fnamemodify(svg, ':t') .. '（:w でこの図を更新）',
+        vim.log.levels.INFO)
+    return true
+end
+
 function M.studio_scratch(kind)
     vim.fn.mkdir(CACHE, 'p')
     local target = CACHE .. '/scratch.fig.svg'
