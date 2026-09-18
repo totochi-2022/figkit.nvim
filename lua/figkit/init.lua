@@ -14,6 +14,7 @@
 --   :FigOpenStudio       ← ,,s  Studio を開く（作る→📋/📄→md へ）
 --   :FigStopStudio             Studio を止める（! で ttyd/tmux も）
 --   :FigNewFromTemplate  ← ,,m  テンプレから md に直接作る
+--   :FigHealth                 依存チェック（= :checkhealth figkit）
 --
 -- なぜクリップボード経由に寄せたか:
 --   以前「md のフェンスにカーソルを置いて :DiagramRender」という方式があったが、
@@ -452,6 +453,13 @@ function M.setup(opts)
     cmd('FigStopStudio', function(o) M.stop_studio(o.bang) end,
         { bang = true,
           desc = '図: Studio を止める（! で ttyd/tmux も。既定は Streamlit だけ＝コード反映用）' })
+    -- 依存チェック。`:checkhealth figkit` と同じだが、こちらは遅延ロード中でも打てる
+    -- （checkhealth は rtp から lua/figkit/health.lua を探すので、プラグインが
+    --   読み込まれていないと "No healthcheck found" になる。このコマンドが
+    --   cmd トリガになってロードされた時点で rtp に載る）。
+    cmd('FigHealth', function() vim.cmd.checkhealth('figkit') end,
+        { desc = '図: 依存チェック（= :checkhealth figkit）' })
+
     cmd('FigNewFromTemplate', function(o)
         local kind, fmt
         for _, a in ipairs(o.fargs) do

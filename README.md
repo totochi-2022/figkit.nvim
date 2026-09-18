@@ -23,6 +23,7 @@ Markdown/Typst に貼る**図と画像**の「作る / 直す」を Neovim か�
 | `:FigNewFromTemplate [tmpl] [svg\|png]` | `,,m` | テンプレから `assets/` に作ってリンク挿入 → 分割バッファで編集 |
 | `:FigStopStudio[!]` | | Studio を止める（`!` で ttyd/tmux も） |
 | `:FigClipInfo` | | いま `,,p` が何をするかだけ表示（書き込まない） |
+| `:FigHealth` | | 依存チェック（= `:checkhealth figkit`） |
 
 自動判別に頼らず直接叩く用の個別コマンドもある（`:Fig<Tab>` で一覧）:
 `FigRenderPython` / `FigPasteSvg` / `FigPasteDrawioXml` / `FigPasteImage` /
@@ -55,6 +56,27 @@ Markdown/Typst に貼る**図と画像**の「作る / 直す」を Neovim か�
 ```
 
 キーマップは付けない（`,,` は howm/telekasten と競合しやすいので呼び出し側で決める）。
+
+### 依存が揃っているか確認する
+
+```vim
+:FigHealth     " = :checkhealth figkit
+```
+
+**機能ごとに分けて報告する**（依存が多く、欠け方も部分的なので）:
+
+- **図の生成** … python3 / Pillow / schemdraw・matplotlib・rdkit（使うテンプレの分だけ）
+- **画像注釈** … 同梱アセット（marker.js 一式）が読めるか。依存は stdlib のみ
+- **Studio** … streamlit / ttyd / tmux / curl / pyright
+- **ポート** … 31624・7690・8501・8770 を**古いプロセスが掴んでいないか**。
+  注釈サーバ(31624)は `/vendor/` が 200 を返すかで新旧を判定する
+  （プラグインを移動・更新したあと、起動中のサーバが消えたパスを掴んだままになる事故がある）
+- **連携と環境** … img-clip / `v:servername` / クリップボード provider /
+  wslu のバージョンと binfmt 登録名 / draw.io / `on_change` が注入されているか
+
+`:checkhealth figkit` も同じものだが、**遅延ロード中は nvim が health モジュールを
+見つけられない**（rtp に載っていないため）。`:FigHealth` なら `cmd` トリガで
+プラグインが読み込まれてから走るので、どの状態でも打てる。
 
 ### 必要なもの
 
