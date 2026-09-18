@@ -41,8 +41,16 @@ Markdown/Typst に貼る**図と画像**の「作る / 直す」を Neovim か�
     opts = {
         -- 図/注釈を書き換えたあとに呼ばれる。プレビューを持っているならここで再読込させる。
         on_change = function(buf) require('my-preview').reload(buf) end,
-        -- 注釈エディタ / Studio の URL の開き方（既定は wslview → vim.ui.open）
-        open_url = function(url, title) vim.fn.jobstart({ 'wslview', url }, { detach = true }) end,
+        -- 注釈エディタ / Studio の URL の開き方（既定は wslview → vim.ui.open）。
+        -- kind は 'pane'(1枚もの・狭い枠でも成立) か 'tab'(全幅が要る) の申告。
+        -- 無視して常にタブで開いても壊れない。
+        open_url = function(url, title, kind)
+            if kind ~= 'tab' and my_preview_pane_is_open() then
+                my_preview_pane.open(url, title)   -- 注釈はペインに収まる
+            else
+                vim.fn.jobstart({ 'wslview', url }, { detach = true })  -- Studio は全幅
+            end
+        end,
         -- draw.io デスクトップ版（WSL から Windows 側を叩く）
         drawio_exe = '/mnt/c/Program Files/draw.io/draw.io.exe',
     },

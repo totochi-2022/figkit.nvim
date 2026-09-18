@@ -18,7 +18,7 @@ local M = {}
 -- init.lua が setup() で注入する（on_change / drawio_exe）。
 M.config = {
     on_change = function(_buf) end,
-    open_url = function(url, _t) vim.fn.jobstart({ 'wslview', url }, { detach = true }) end,
+    open_url = function(url, _t, _k) vim.fn.jobstart({ 'wslview', url }, { detach = true }) end,
 }
 
 local TTYD_PORT = 7690           -- 7681 は既存サービスが居るので避ける
@@ -200,7 +200,8 @@ function M.studio(target, source)
         STUDIO_PORT, target, py, TTYD_PORT, sock,
         urlenc(vim.v.servername), studio_ctx.buf, studio_ctx.scratch and '1' or '')
     vim.defer_fn(function()
-        M.config.open_url(url, 'Studio')
+        -- Studio は左=nvim / 右=SVG の2ペイン構成なので全幅が要る＝タブで開く
+        M.config.open_url(url, 'Studio', 'tab')
     end, up and 400 or 4000) -- streamlit/ttyd/vivify の listen 待ち
     vim.notify('studio: ' .. vim.fn.fnamemodify(target, ':t') .. '（左=nvim/右=SVG, :w で更新）',
         vim.log.levels.INFO)

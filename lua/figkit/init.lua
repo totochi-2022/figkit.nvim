@@ -44,7 +44,12 @@ M.config = {
     on_change = function(_buf) end,
     -- 注釈エディタ / studio の URL を開く。既定は wslview → vim.ui.open。
     -- プレビューペインを持っている人はここを差し替えて自分の枠に出せる。
-    open_url = function(url, _title)
+    --
+    -- kind は「どの枠に出すのが妥当か」の申告:
+    --   'pane' … 1枚もののエディタ。狭いペインに入れても成立する（注釈）
+    --   'tab'  … それ自体が左右2ペインの作業台。**全幅が要る**（Studio）
+    -- 受け側はこれを見て振り分ける。無視して常にタブでも壊れない。
+    open_url = function(url, _title, _kind)
         if vim.fn.executable('wslview') == 1 then
             vim.fn.jobstart({ 'wslview', url }, { detach = true })
         elseif vim.ui and vim.ui.open then

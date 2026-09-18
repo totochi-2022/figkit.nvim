@@ -20,7 +20,7 @@ local M = {}
 -- init.lua が setup() で注入する。
 M.config = {
     on_change = function(_buf) end,
-    open_url = function(url, _t) vim.fn.jobstart({ 'wslview', url }, { detach = true }) end,
+    open_url = function(url, _t, _k) vim.fn.jobstart({ 'wslview', url }, { detach = true }) end,
 }
 
 local PORT = 31624
@@ -105,7 +105,7 @@ function M.open(path, md_buf)
         md_buf or vim.api.nvim_get_current_buf())
 
     vim.defer_fn(function()
-        M.config.open_url(url, 'Annot')
+        M.config.open_url(url, 'Annot', 'pane')  -- 1枚ものなのでペインで成立する
     end, started and 1200 or 150)
 
     vim.notify('注釈: ' .. vim.fn.fnamemodify(orig, ':t')
